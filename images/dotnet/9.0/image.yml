@@ -1,0 +1,16 @@
+tags:
+  - name: 9.0.100
+    versions:
+      dotnet-sdk: 9.0.1xx
+  - name: 9.0.200
+    versions:
+      dotnet-sdk: 9.0.2xx
+  - name: 9.0.300
+    versions:
+      dotnet-sdk: 9.0.3xx
+
+variants:
+  - name: semantic-release
+    tag_suffix: -semantic
+    versions:
+      nodejs: "24"

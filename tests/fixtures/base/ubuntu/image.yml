@@ -1,0 +1,8 @@
+name: ubuntu
+is_base_image: true
+versions:
+  base: "24.04"
+tags:
+  - name: "24.04"
+    versions:
+      ubuntu: "24.04"

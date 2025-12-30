@@ -1,0 +1,4 @@
+name: base
+is_base_image: true
+tags:
+  - name: "2025.09"

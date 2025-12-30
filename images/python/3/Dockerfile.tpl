@@ -1,0 +1,39 @@
+FROM {{ "base" | resolve_base_image }}
+USER 0
+
+ENV PYENV_ROOT=/usr/share/pyenv \
+	PATH=/usr/share/pyenv/shims:/usr/share/pyenv/bin:$PATH \
+	PYTHON_VERSION={{ "python" | resolve_version}} \
+	PIPENV_DEFAULT_PYTHON_VERSION={{ "python" | resolve_version}} \
+	PYTHON_CONFIGURE_OPTS="--enable-shared --enable-optimizations"
+
+RUN apt-get update \
+    && apt-get install -y \
+		build-essential \
+		libbz2-dev \
+		liblzma-dev \
+		libncurses5-dev \
+		libncursesw5-dev \
+		libreadline-dev \
+		libffi-dev \
+		libsqlite3-dev \
+		libssl-dev \
+		libxml2-dev \
+		libxmlsec1-dev \
+		llvm \
+		make \
+		python3-openssl \
+		tk-dev \
+		xz-utils \
+		zlib1g-dev && \
+	curl -sSL "https://github.com/pyenv/pyenv-installer/raw/master/bin/pyenv-installer" | bash \
+    && rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
+
+RUN pyenv install {{ "python" | resolve_version}} && pyenv global {{ "python" | resolve_version}}
+
+RUN pip install pipx \
+    && pipx install pipenv \
+    && pipx install uv=={{ "uv" | resolve_version}} \
+    && pipx install poetry=={{ "poetry" | resolve_version }}
+
+USER 1000

@@ -1,0 +1,26 @@
+[project]
+name = "poc-base-image-manager"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "jinja2>=3.1.6",
+    "pydantic>=2.11.9",
+    "pydantic-yaml>=1.6.0",
+    "semver>=3.0.4",
+]
+
+[tool.uv]
+package = true
+
+[tool.setuptools.package-dir]
+manager = "manager"
+
+[dependency-groups]
+dev = [
+    "pytest>=9.0.1",
+]
+
+[project.scripts]
+image-manager = "manager.__main__:main"
