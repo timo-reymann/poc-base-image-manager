@@ -19,7 +19,7 @@ DEFAULT_BUILDKIT_DIR = Path(__file__).parent.parent / ".buildkit"
 DEFAULT_SOCKET_PATH = DEFAULT_BUILDKIT_DIR / "buildkitd.sock"
 CONTAINER_NAME = "image-manager-buildkitd"
 CONTAINER_PORT = 8372  # Port for buildkitd on macOS
-BUILDKIT_IMAGE = "moby/buildkit:latest"
+BUILDKIT_IMAGE = "moby/buildkit:rootless"
 
 # Local registry for base image resolution
 REGISTRY_CONTAINER_NAME = "image-manager-registry"
@@ -146,7 +146,7 @@ def is_port_open(port: int, timeout: float = 0.1) -> bool:
 
 
 def start_buildkitd_container() -> int:
-    """Start buildkitd as a Docker container (for macOS)."""
+    """Start buildkitd as a rootless Docker container (for macOS)."""
     if is_container_running():
         print("buildkitd container is already running")
         return 0
@@ -169,28 +169,33 @@ def start_buildkitd_container() -> int:
   insecure = true
 """
 
-    print(f"Starting buildkitd container ({BUILDKIT_IMAGE})...")
+    # Create config directory for buildkitd
+    config_dir = DEFAULT_BUILDKIT_DIR / "config"
+    config_dir.mkdir(parents=True, exist_ok=True)
+    config_file = config_dir / "buildkitd.toml"
+    config_file.write_text(buildkitd_config)
+
+    print(f"Starting buildkitd container rootless ({BUILDKIT_IMAGE})...")
     try:
-        container = client.containers.run(
+        client.containers.run(
             BUILDKIT_IMAGE,
             name=CONTAINER_NAME,
             detach=True,
-            privileged=True,
+            # Rootless mode - no privileged flag needed
+            security_opt=["seccomp=unconfined", "apparmor=unconfined"],
             ports={f"{CONTAINER_PORT}/tcp": ("127.0.0.1", CONTAINER_PORT)},
             command=[
                 "--addr", f"tcp://0.0.0.0:{CONTAINER_PORT}",
+                "--oci-worker-no-process-sandbox",
                 "--config", "/etc/buildkit/buildkitd.toml",
             ],
             environment={
-                "BUILDKITD_CONFIG": buildkitd_config,
+                "BUILDKITD_FLAGS": "--oci-worker-no-process-sandbox",
+            },
+            volumes={
+                str(config_file.absolute()): {"bind": "/etc/buildkit/buildkitd.toml", "mode": "ro"},
             },
         )
-        # Write config into container
-        container.exec_run(
-            ["sh", "-c", f"mkdir -p /etc/buildkit && cat > /etc/buildkit/buildkitd.toml << 'EOF'\n{buildkitd_config}EOF"],
-        )
-        # Restart to pick up config
-        container.restart()
     except APIError as e:
         print(f"Failed to start buildkitd container: {e}", file=sys.stderr)
         return 1
@@ -199,7 +204,7 @@ def start_buildkitd_container() -> int:
     print("Waiting for buildkitd to be ready...")
     for _ in range(50):  # 5 second timeout
         if is_port_open(CONTAINER_PORT):
-            print(f"buildkitd container started (addr: tcp://127.0.0.1:{CONTAINER_PORT})")
+            print(f"buildkitd container started rootless (addr: tcp://127.0.0.1:{CONTAINER_PORT})")
             return 0
         time.sleep(0.1)
 

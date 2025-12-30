@@ -39,12 +39,17 @@ def is_dind_running() -> bool:
 
 
 def start_dind() -> int:
-    """Start Docker-in-Docker container for testing."""
+    """Start Docker-in-Docker container for testing.
+
+    On Linux: Tries to run with minimal capabilities (SYS_ADMIN, NET_ADMIN, MKNOD).
+    On macOS: Uses privileged mode as Docker Desktop's VM has cgroup limitations.
+    """
     if is_dind_running():
         print("dind container is already running")
         return 0
 
     client = get_host_client()
+    system = platform.system().lower()
 
     # Remove any existing container
     try:
@@ -54,18 +59,50 @@ def start_dind() -> int:
         pass
 
     print(f"Starting dind container ({DIND_IMAGE})...")
-    try:
-        container = client.containers.run(
-            DIND_IMAGE,
-            name=DIND_CONTAINER_NAME,
-            detach=True,
-            privileged=True,
-            ports={"2375/tcp": ("127.0.0.1", DIND_PORT)},
-            environment={"DOCKER_TLS_CERTDIR": ""},
-        )
-    except APIError as e:
-        print(f"Failed to start dind container: {e}", file=sys.stderr)
-        return 1
+
+    if system == "linux":
+        # On Linux, try with minimal capabilities first
+        try:
+            client.containers.run(
+                DIND_IMAGE,
+                name=DIND_CONTAINER_NAME,
+                detach=True,
+                cap_add=["SYS_ADMIN", "NET_ADMIN", "MKNOD"],
+                security_opt=["seccomp=unconfined", "apparmor=unconfined"],
+                ports={"2375/tcp": ("127.0.0.1", DIND_PORT)},
+                environment={"DOCKER_TLS_CERTDIR": ""},
+                cgroupns="host",
+            )
+        except APIError as e:
+            print(f"Capabilities mode failed ({e}), using privileged mode...")
+            try:
+                old = client.containers.get(DIND_CONTAINER_NAME)
+                old.remove(force=True)
+            except NotFound:
+                pass
+
+            client.containers.run(
+                DIND_IMAGE,
+                name=DIND_CONTAINER_NAME,
+                detach=True,
+                privileged=True,
+                ports={"2375/tcp": ("127.0.0.1", DIND_PORT)},
+                environment={"DOCKER_TLS_CERTDIR": ""},
+            )
+    else:
+        # On macOS, Docker Desktop requires privileged for dind
+        try:
+            client.containers.run(
+                DIND_IMAGE,
+                name=DIND_CONTAINER_NAME,
+                detach=True,
+                privileged=True,
+                ports={"2375/tcp": ("127.0.0.1", DIND_PORT)},
+                environment={"DOCKER_TLS_CERTDIR": ""},
+            )
+        except APIError as e:
+            print(f"Failed to start dind container: {e}", file=sys.stderr)
+            return 1
 
     # Wait for Docker daemon inside dind to be ready
     print("Waiting for Docker daemon to be ready...")
