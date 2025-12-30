@@ -6,43 +6,92 @@ e.g. runtime images.
 
 ## Requirements
 
-- Docker 
+- Docker
 - uv
 - Python 3.13
-- [container-structure-test](https://github.com/GoogleContainerTools/container-structure-test)
+
+## Bundled Tools
+
+The following tools are bundled in `bin/` for linux-amd64 and darwin-arm64:
+
+| Tool | Version | Purpose |
+|------|---------|---------|
+| [crane](https://github.com/google/go-containerregistry) | v0.20.7 | Multi-tagging images |
+| [container-structure-test](https://github.com/GoogleContainerTools/container-structure-test) | v1.22.1 | Image testing |
+| [syft](https://github.com/anchore/syft) | v1.39.0 | SBOM generation |
+| [buildkit](https://github.com/moby/buildkit) | v0.26.3 | Rootless builds |
 
 ## Usage
 
-- `uv install`
-- `uv run image-manager`
-- Inspect generated files in dist/
-    - Folders for builds
-    - Files for tags (would be `crane tag` or similar)
+```shell
+uv sync
+uv run image-manager <command> [args]
+```
+
+Commands:
+- `generate` - Generate Dockerfiles and test configs from `images/`
+- `build [image:tag] [--no-cache]` - Build image(s) to `dist/<name>/<tag>/image.tar`
+- `test [image:tag]` - Test image(s) using the tar archive
+- `start [daemon]` - Start daemons (buildkitd, registry, garage, dind, or all)
+- `stop [daemon]` - Stop daemons
+- `status [daemon]` - Check daemon status
+
+When no image is specified for `build` or `test`, all images are processed in dependency order.
+
+Output in dist/:
+- `Dockerfile` - Generated Dockerfile
+- `test.yml` - Test configuration
+- `image.tar` - Built image (after build)
 
 ## Example
 
-Showcase on how the images could be built and tested.
+```shell
+# Generate Dockerfiles and test configs
+uv run image-manager generate
 
-1. Generate the files
-    ```shell
-    uv run image-manager
-    ```
-1. Build the base image
-   ```shell
-   docker build dist/base/2025.09/ -f dist/base/2025.09/Dockerfile  -t base:2025.9
-   ```
-2. Run tests for the built image
-    ```shell
-    container-structure-test test --image base:2025.09 --config dist/base/2025.09/test.yml
-    ```
-3. Build dotnet 9.0.300 which uses the base image
-    ```shell
-    docker build dist/dotnet/9.0.300 -f dist/dotnet/9.0.300/Dockerfile  -t dotnet:9.0.30
-    ```
-4. Run tests for built dotnet image
-    ```shell
-    container-structure-test test --image dotnet:9.0.300 --config dist/dotnet/9.0.300/test.ym
-    ```
+# Build and test all images (in dependency order)
+uv run image-manager build
+uv run image-manager build --no-cache  # Build without S3 cache
+uv run image-manager test
+
+# Or build and test specific images
+uv run image-manager build base:2025.9
+uv run image-manager test base:2025.9
+
+# Stop daemons when done
+uv run image-manager stop
+```
+
+### Daemon management
+
+Daemons are started automatically when needed, or can be managed manually:
+
+```shell
+uv run image-manager start             # Start all daemons
+uv run image-manager start buildkitd   # Start only buildkitd
+uv run image-manager start registry    # Start only registry
+uv run image-manager start garage      # Start only garage (S3 cache)
+uv run image-manager status            # Check status of all
+uv run image-manager stop              # Stop all
+```
+
+**buildkitd** (for building):
+- **Linux**: Runs natively using the bundled binary
+- **macOS**: Runs in a Docker container (`moby/buildkit`)
+
+**registry** (for base image resolution):
+- Local registry container (`registry:2`) on port 5050
+- Built images are automatically pushed to the registry
+- Dependent images pull their base from the registry (no host Docker dependency)
+
+**dind** (for testing):
+- Runs Docker-in-Docker container (`docker:dind`)
+- Images are loaded from tar archives into the isolated daemon
+
+**garage** (for build caching):
+- S3-compatible storage container (`dxflrs/garage`) on port 3900
+- Provides build layer caching for BuildKit
+- Automatically used during builds (disable with `--no-cache`)
 
 ## Features
 
@@ -52,6 +101,7 @@ Showcase on how the images could be built and tested.
 - Allows supporting multiple tag hierarchies
 - **Automatic semantic version aliases** - Generates all prefix-level aliases from tags
 - Integration with container-structure-test for testing containers
+- **S3-based build caching** - Uses Garage for fast incremental builds
 
 ## Missing features
 

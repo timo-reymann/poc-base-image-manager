@@ -14,3 +14,6 @@ wheels/
 
 # Worktrees
 .worktrees/
+
+# Buildkit runtime
+.buildkit/

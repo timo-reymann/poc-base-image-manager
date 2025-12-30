@@ -1,4 +1,5 @@
-import os
+"""Unified CLI for image manager."""
+
 import shutil
 import sys
 from pathlib import Path
@@ -9,7 +10,60 @@ from manager.rendering import RenderContext, render_dockerfile, render_test_conf
 from manager.dependency_graph import sort_images, extract_dependencies, CyclicDependencyError
 
 
-def main():
+def print_usage() -> None:
+    """Print main usage information."""
+    print("Usage: image-manager <command> [args]", file=sys.stderr)
+    print()
+    print("Commands:")
+    print("  generate            Generate Dockerfiles and test configs from images/")
+    print("  build [image:tag]   Build an image (or all images if none specified)")
+    print("  test [image:tag]    Test an image (or all images if none specified)")
+    print("  start [daemon]      Start daemons (buildkitd, registry, garage, dind, or all)")
+    print("  stop [daemon]       Stop daemons (buildkitd, registry, garage, dind, or all)")
+    print("  status [daemon]     Check daemon status")
+    print()
+    print("Build options:")
+    print("  --no-cache          Disable S3 build cache")
+    print()
+    print("Examples:")
+    print("  image-manager generate")
+    print("  image-manager build              # Build all images with cache")
+    print("  image-manager build --no-cache   # Build without cache")
+    print("  image-manager build base:2025.9  # Build specific image")
+    print("  image-manager test               # Test all images")
+    print("  image-manager start")
+    print("  image-manager status")
+
+
+def get_all_image_refs() -> list[str]:
+    """Get all image references from dist/ directory in dependency order.
+
+    Returns list of image:tag strings for all generated images.
+    """
+    # Load and resolve all images to get dependency order
+    resolver = ModelResolver()
+    all_images = []
+    for image_yaml in Path("images").glob("**/image.yml"):
+        config = ConfigLoader.load(image_yaml)
+        image = resolver.resolve(config, image_yaml.parent)
+        all_images.append(image)
+
+    sorted_images = sort_images(all_images)
+
+    # Collect all image:tag references
+    refs = []
+    for image in sorted_images:
+        for tag in image.tags:
+            refs.append(f"{image.name}:{tag.name}")
+        for variant in image.variants:
+            for variant_tag in variant.tags:
+                refs.append(f"{image.name}:{variant_tag.name}")
+
+    return refs
+
+
+def cmd_generate() -> int:
+    """Generate Dockerfiles and test configs."""
     dist_path = Path("dist")
     shutil.rmtree(dist_path.__str__(), ignore_errors=True)
 
@@ -28,7 +82,7 @@ def main():
         print(f"Error: {e}", file=sys.stderr)
         print("\nCannot generate images due to circular dependencies.", file=sys.stderr)
         print("Please review your image configurations and remove any circular references.", file=sys.stderr)
-        sys.exit(1)
+        return 1
 
     # Log the build order with dependencies
     print("Build order (dependencies resolved):")
@@ -82,6 +136,274 @@ def main():
             for alias, tag_name in variant.aliases.items():
                 alias_out_path = image_out_path.joinpath(alias)
                 alias_out_path.write_text(tag_name)
+
+    return 0
+
+
+def cmd_build(args: list[str]) -> int:
+    """Build an image or all images."""
+    from manager.building import run_build, ensure_buildkitd, ensure_registry, ensure_garage
+
+    context_path = None
+    image_refs = []
+    use_cache = True
+
+    # Parse options and image refs
+    i = 0
+    while i < len(args):
+        if args[i] == "--context" and i + 1 < len(args):
+            context_path = Path(args[i + 1])
+            i += 2
+        elif args[i] == "--no-cache":
+            use_cache = False
+            i += 1
+        elif args[i].startswith("--"):
+            print(f"Unknown argument: {args[i]}", file=sys.stderr)
+            return 1
+        else:
+            image_refs.append(args[i])
+            i += 1
+
+    # If no image specified, build all
+    if not image_refs:
+        try:
+            image_refs = get_all_image_refs()
+            if not image_refs:
+                print("No images found. Run 'image-manager generate' first.", file=sys.stderr)
+                return 1
+            print(f"Building all images ({len(image_refs)} total)...")
+        except CyclicDependencyError as e:
+            print(f"Error: {e}", file=sys.stderr)
+            return 1
+
+    # Start buildkitd and registry once for all builds
+    if not ensure_buildkitd():
+        print("Error: Failed to start buildkitd", file=sys.stderr)
+        return 1
+    if not ensure_registry():
+        print("Error: Failed to start registry", file=sys.stderr)
+        return 1
+    if use_cache and not ensure_garage():
+        print("Warning: Failed to start garage, building without cache", file=sys.stderr)
+        use_cache = False
+
+    # Build each image
+    failed = []
+    for image_ref in image_refs:
+        print(f"\n{'='*60}")
+        print(f"Building {image_ref}")
+        print(f"{'='*60}")
+        try:
+            result = run_build(image_ref, context_path, auto_start=False, use_cache=use_cache)
+            if result != 0:
+                failed.append(image_ref)
+        except (RuntimeError, FileNotFoundError, ValueError) as e:
+            print(f"Error: {e}", file=sys.stderr)
+            failed.append(image_ref)
+
+    if failed:
+        print(f"\nFailed to build: {', '.join(failed)}", file=sys.stderr)
+        return 1
+
+    print(f"\nSuccessfully built {len(image_refs)} image(s)")
+    return 0
+
+
+def cmd_test(args: list[str]) -> int:
+    """Test an image or all images."""
+    from manager.testing import run_test, ensure_dind
+
+    config_path = None
+    image_refs = []
+
+    # Parse options and image refs
+    i = 0
+    while i < len(args):
+        if args[i] == "--config" and i + 1 < len(args):
+            config_path = Path(args[i + 1])
+            i += 2
+        elif args[i].startswith("--"):
+            print(f"Unknown argument: {args[i]}", file=sys.stderr)
+            return 1
+        else:
+            image_refs.append(args[i])
+            i += 1
+
+    # If no image specified, test all
+    if not image_refs:
+        try:
+            image_refs = get_all_image_refs()
+            if not image_refs:
+                print("No images found. Run 'image-manager generate' first.", file=sys.stderr)
+                return 1
+            print(f"Testing all images ({len(image_refs)} total)...")
+        except CyclicDependencyError as e:
+            print(f"Error: {e}", file=sys.stderr)
+            return 1
+
+    # Start dind once for all tests
+    if not ensure_dind():
+        print("Error: Failed to start dind container", file=sys.stderr)
+        return 1
+
+    # Test each image
+    failed = []
+    for image_ref in image_refs:
+        print(f"\n{'='*60}")
+        print(f"Testing {image_ref}")
+        print(f"{'='*60}")
+        try:
+            result = run_test(image_ref, config_path, auto_start=False)
+            if result != 0:
+                failed.append(image_ref)
+        except (RuntimeError, FileNotFoundError, ValueError) as e:
+            print(f"Error: {e}", file=sys.stderr)
+            failed.append(image_ref)
+
+    if failed:
+        print(f"\nFailed tests: {', '.join(failed)}", file=sys.stderr)
+        return 1
+
+    print(f"\nAll {len(image_refs)} image(s) passed tests")
+    return 0
+
+
+def cmd_start(args: list[str]) -> int:
+    """Start daemons."""
+    from manager.building import start_buildkitd, start_registry, start_garage
+    from manager.testing import start_dind
+
+    daemon = args[0] if args else "all"
+    valid_daemons = ("all", "buildkitd", "registry", "garage", "dind")
+
+    if daemon not in valid_daemons:
+        print(f"Unknown daemon: {daemon}", file=sys.stderr)
+        print(f"Available: {', '.join(valid_daemons)}", file=sys.stderr)
+        return 1
+
+    if daemon in ("all", "buildkitd"):
+        result = start_buildkitd()
+        if result != 0 and daemon == "buildkitd":
+            return result
+
+    if daemon in ("all", "registry"):
+        result = start_registry()
+        if result != 0 and daemon == "registry":
+            return result
+
+    if daemon in ("all", "garage"):
+        result = start_garage()
+        if result != 0 and daemon == "garage":
+            return result
+
+    if daemon in ("all", "dind"):
+        result = start_dind()
+        if result != 0 and daemon == "dind":
+            return result
+
+    return 0
+
+
+def cmd_stop(args: list[str]) -> int:
+    """Stop daemons."""
+    from manager.building import stop_buildkitd, stop_registry, stop_garage
+    from manager.testing import stop_dind
+
+    daemon = args[0] if args else "all"
+    valid_daemons = ("all", "buildkitd", "registry", "garage", "dind")
+
+    if daemon not in valid_daemons:
+        print(f"Unknown daemon: {daemon}", file=sys.stderr)
+        print(f"Available: {', '.join(valid_daemons)}", file=sys.stderr)
+        return 1
+
+    if daemon in ("all", "buildkitd"):
+        stop_buildkitd()
+
+    if daemon in ("all", "registry"):
+        stop_registry()
+
+    if daemon in ("all", "garage"):
+        stop_garage()
+
+    if daemon in ("all", "dind"):
+        stop_dind()
+
+    return 0
+
+
+def cmd_status(args: list[str]) -> int:
+    """Check daemon status."""
+    from manager.building import is_buildkitd_running, get_socket_addr, is_registry_running, get_registry_addr, is_garage_running, get_garage_s3_endpoint
+    from manager.testing import is_dind_running, get_docker_host
+
+    daemon = args[0] if args else "all"
+    valid_daemons = ("all", "buildkitd", "registry", "garage", "dind")
+    all_running = True
+
+    if daemon not in valid_daemons:
+        print(f"Unknown daemon: {daemon}", file=sys.stderr)
+        print(f"Available: {', '.join(valid_daemons)}", file=sys.stderr)
+        return 1
+
+    if daemon in ("all", "buildkitd"):
+        if is_buildkitd_running():
+            print(f"buildkitd: running (addr: {get_socket_addr()})")
+        else:
+            print("buildkitd: not running")
+            all_running = False
+
+    if daemon in ("all", "registry"):
+        if is_registry_running():
+            print(f"registry: running (addr: {get_registry_addr()})")
+        else:
+            print("registry: not running")
+            all_running = False
+
+    if daemon in ("all", "garage"):
+        if is_garage_running():
+            print(f"garage: running (addr: {get_garage_s3_endpoint()})")
+        else:
+            print("garage: not running")
+            all_running = False
+
+    if daemon in ("all", "dind"):
+        if is_dind_running():
+            print(f"dind: running (addr: {get_docker_host()})")
+        else:
+            print("dind: not running")
+            all_running = False
+
+    return 0 if all_running else 1
+
+
+def main():
+    if len(sys.argv) < 2:
+        print_usage()
+        sys.exit(1)
+
+    command = sys.argv[1]
+    args = sys.argv[2:]
+
+    if command in ("--help", "-h"):
+        print_usage()
+        sys.exit(0)
+    elif command == "generate":
+        sys.exit(cmd_generate())
+    elif command == "build":
+        sys.exit(cmd_build(args))
+    elif command == "test":
+        sys.exit(cmd_test(args))
+    elif command == "start":
+        sys.exit(cmd_start(args))
+    elif command == "stop":
+        sys.exit(cmd_stop(args))
+    elif command == "status":
+        sys.exit(cmd_status(args))
+    else:
+        print(f"Unknown command: {command}", file=sys.stderr)
+        print_usage()
+        sys.exit(1)
 
 
 if __name__ == "__main__":
