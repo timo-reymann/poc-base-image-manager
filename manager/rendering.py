@@ -95,8 +95,12 @@ def generate_image_report(images: list[Image], snapshot_id: str | None = None) -
     report_path = dist_path / "index.html"
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
+    # Count tags and aliases separately
     total_tags = sum(len(img.tags) for img in images)
-    total_variants = sum(len(img.variants) for img in images)
+    total_aliases = sum(len(img.aliases) for img in images)
+    # Count variant tags and aliases separately
+    total_variant_tags = sum(len(v.tags) for img in images for v in img.variants)
+    total_variant_aliases = sum(len(v.aliases) for img in images for v in img.variants)
 
     html = f"""<!DOCTYPE html>
 <html lang="en">
@@ -119,9 +123,12 @@ def generate_image_report(images: list[Image], snapshot_id: str | None = None) -
         .toc ul {{ margin: 0; padding-left: 20px; }}
         .toc li {{ margin: 5px 0; }}
         .image-section {{ margin-bottom: 30px; }}
-        .tag {{ display: inline-block; background: #e0e7ff; color: #3730a3; padding: 4px 10px; border-radius: 4px; font-size: 13px; margin: 3px; font-family: monospace; }}
-        .variant {{ display: inline-block; background: #fef3c7; color: #92400e; padding: 4px 10px; border-radius: 4px; font-size: 13px; margin: 3px; font-family: monospace; }}
-        .alias {{ display: inline-block; background: #d1fae5; color: #065f46; padding: 4px 10px; border-radius: 4px; font-size: 13px; margin: 3px; font-family: monospace; }}
+        .tag-group {{ display: inline-flex; align-items: center; margin: 3px; border-radius: 4px; overflow: hidden; }}
+        .tag {{ display: inline-block; background: #e0e7ff; color: #3730a3; padding: 4px 10px; font-size: 13px; font-family: monospace; }}
+        .tag-aliases {{ display: inline-block; background: #c7d2fe; color: #3730a3; padding: 4px 8px; font-size: 11px; font-family: monospace; border-left: 1px solid #a5b4fc; }}
+        .variant-group {{ display: inline-flex; align-items: center; margin: 3px; border-radius: 4px; overflow: hidden; }}
+        .variant {{ display: inline-block; background: #fef3c7; color: #92400e; padding: 4px 10px; font-size: 13px; font-family: monospace; }}
+        .variant-aliases {{ display: inline-block; background: #fde68a; color: #92400e; padding: 4px 8px; font-size: 11px; font-family: monospace; border-left: 1px solid #fcd34d; }}
         .base-image {{ display: inline-block; background: #fee2e2; color: #991b1b; padding: 2px 8px; border-radius: 3px; font-size: 11px; margin-left: 10px; }}
         table {{ width: 100%; border-collapse: collapse; margin: 15px 0; }}
         th, td {{ text-align: left; padding: 10px; border-bottom: 1px solid #eee; }}
@@ -148,8 +155,16 @@ def generate_image_report(images: list[Image], snapshot_id: str | None = None) -
                 <div class="stat-label">Tags</div>
             </div>
             <div class="stat">
-                <div class="stat-value">{total_variants}</div>
-                <div class="stat-label">Variants</div>
+                <div class="stat-value">{total_aliases}</div>
+                <div class="stat-label">Aliases</div>
+            </div>
+            <div class="stat">
+                <div class="stat-value">{total_variant_tags}</div>
+                <div class="stat-label">Variant Tags</div>
+            </div>
+            <div class="stat">
+                <div class="stat-value">{total_variant_aliases}</div>
+                <div class="stat-label">Variant Aliases</div>
             </div>
         </div>
 
@@ -168,6 +183,12 @@ def generate_image_report(images: list[Image], snapshot_id: str | None = None) -
 
     for img in images:
         base_label = '<span class="base-image">base image</span>' if img.is_base_image else ''
+
+        # Build reverse alias mapping: target -> [aliases]
+        tag_to_aliases: dict[str, list[str]] = {}
+        for alias, target in img.aliases.items():
+            tag_to_aliases.setdefault(target, []).append(alias)
+
         html += f"""
         <div class="image-section">
             <h2 id="{img.name}">{img.name} {base_label}</h2>
@@ -175,25 +196,33 @@ def generate_image_report(images: list[Image], snapshot_id: str | None = None) -
             <div>
 """
         for tag in img.tags:
-            html += f'                <span class="tag">{tag.name}</span>\n'
+            aliases_for_tag = sorted(tag_to_aliases.get(tag.name, []))
+            if aliases_for_tag:
+                aliases_str = ", ".join(aliases_for_tag)
+                html += f'                <span class="tag-group"><span class="tag">{tag.name}</span><span class="tag-aliases">{aliases_str}</span></span>\n'
+            else:
+                html += f'                <span class="tag-group"><span class="tag">{tag.name}</span></span>\n'
 
         html += "            </div>\n"
-
-        # Aliases
-        if img.aliases:
-            html += "            <p><strong>Aliases:</strong></p>\n            <div>\n"
-            for alias, target in sorted(img.aliases.items()):
-                html += f'                <span class="alias">{alias} &rarr; {target}</span>\n'
-            html += "            </div>\n"
 
         # Variants
         if img.variants:
             html += "            <p><strong>Variants:</strong></p>\n"
             for variant in img.variants:
+                # Build reverse alias mapping for variant
+                vtag_to_aliases: dict[str, list[str]] = {}
+                for alias, target in variant.aliases.items():
+                    vtag_to_aliases.setdefault(target, []).append(alias)
+
                 html += f'            <div style="margin-left: 20px; margin-bottom: 10px;">\n'
                 html += f'                <strong>{variant.name}</strong><br>\n'
                 for vtag in variant.tags:
-                    html += f'                <span class="variant">{vtag.name}</span>\n'
+                    aliases_for_vtag = sorted(vtag_to_aliases.get(vtag.name, []))
+                    if aliases_for_vtag:
+                        aliases_str = ", ".join(aliases_for_vtag)
+                        html += f'                <span class="variant-group"><span class="variant">{vtag.name}</span><span class="variant-aliases">{aliases_str}</span></span>\n'
+                    else:
+                        html += f'                <span class="variant-group"><span class="variant">{vtag.name}</span></span>\n'
                 html += "            </div>\n"
 
         # Versions table
@@ -243,8 +272,9 @@ def generate_single_image_report(img: Image, snapshot_id: str | None = None) -> 
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
     total_tags = len(img.tags)
-    total_variants = len(img.variants)
-    variant_tags = sum(len(v.tags) for v in img.variants)
+    total_aliases = len(img.aliases)
+    total_variant_tags = sum(len(v.tags) for v in img.variants)
+    total_variant_aliases = sum(len(v.aliases) for v in img.variants)
 
     html = f"""<!DOCTYPE html>
 <html lang="en">
@@ -263,13 +293,16 @@ def generate_single_image_report(img: Image, snapshot_id: str | None = None) -> 
         .stat {{ background: #f0f0f0; padding: 15px; border-radius: 4px; min-width: 100px; }}
         .stat-value {{ font-size: 24px; font-weight: bold; color: #333; }}
         .stat-label {{ color: #666; font-size: 14px; }}
-        .tag {{ display: inline-block; background: #e0e7ff; color: #3730a3; padding: 4px 10px; border-radius: 4px; font-size: 13px; margin: 3px; font-family: monospace; }}
+        .tag-group {{ display: inline-flex; align-items: center; margin: 3px; border-radius: 4px; overflow: hidden; }}
+        .tag {{ display: inline-block; background: #e0e7ff; color: #3730a3; padding: 4px 10px; font-size: 13px; font-family: monospace; }}
         .tag a {{ color: inherit; text-decoration: none; }}
         .tag a:hover {{ text-decoration: underline; }}
-        .variant {{ display: inline-block; background: #fef3c7; color: #92400e; padding: 4px 10px; border-radius: 4px; font-size: 13px; margin: 3px; font-family: monospace; }}
+        .tag-aliases {{ display: inline-block; background: #c7d2fe; color: #3730a3; padding: 4px 8px; font-size: 11px; font-family: monospace; border-left: 1px solid #a5b4fc; }}
+        .variant-group {{ display: inline-flex; align-items: center; margin: 3px; border-radius: 4px; overflow: hidden; }}
+        .variant {{ display: inline-block; background: #fef3c7; color: #92400e; padding: 4px 10px; font-size: 13px; font-family: monospace; }}
         .variant a {{ color: inherit; text-decoration: none; }}
         .variant a:hover {{ text-decoration: underline; }}
-        .alias {{ display: inline-block; background: #d1fae5; color: #065f46; padding: 4px 10px; border-radius: 4px; font-size: 13px; margin: 3px; font-family: monospace; }}
+        .variant-aliases {{ display: inline-block; background: #fde68a; color: #92400e; padding: 4px 8px; font-size: 11px; font-family: monospace; border-left: 1px solid #fcd34d; }}
         .base-image {{ display: inline-block; background: #fee2e2; color: #991b1b; padding: 2px 8px; border-radius: 3px; font-size: 11px; margin-left: 10px; }}
         table {{ width: 100%; border-collapse: collapse; margin: 15px 0; }}
         th, td {{ text-align: left; padding: 10px; border-bottom: 1px solid #eee; }}
@@ -294,12 +327,16 @@ def generate_single_image_report(img: Image, snapshot_id: str | None = None) -> 
                 <div class="stat-label">Tags</div>
             </div>
             <div class="stat">
-                <div class="stat-value">{total_variants}</div>
-                <div class="stat-label">Variants</div>
+                <div class="stat-value">{total_aliases}</div>
+                <div class="stat-label">Aliases</div>
             </div>
             <div class="stat">
-                <div class="stat-value">{variant_tags}</div>
+                <div class="stat-value">{total_variant_tags}</div>
                 <div class="stat-label">Variant Tags</div>
+            </div>
+            <div class="stat">
+                <div class="stat-value">{total_variant_aliases}</div>
+                <div class="stat-label">Variant Aliases</div>
             </div>
         </div>
 
@@ -307,31 +344,39 @@ def generate_single_image_report(img: Image, snapshot_id: str | None = None) -> 
         <div>
 """
 
+    # Build reverse alias mapping: target -> [aliases]
+    tag_to_aliases: dict[str, list[str]] = {}
+    for alias, target in img.aliases.items():
+        tag_to_aliases.setdefault(target, []).append(alias)
+
     for tag in img.tags:
-        html += f'            <span class="tag"><a href="{tag.name}/">{tag.name}</a></span>\n'
+        aliases_for_tag = sorted(tag_to_aliases.get(tag.name, []))
+        if aliases_for_tag:
+            aliases_str = ", ".join(aliases_for_tag)
+            html += f'            <span class="tag-group"><span class="tag"><a href="{tag.name}/">{tag.name}</a></span><span class="tag-aliases">{aliases_str}</span></span>\n'
+        else:
+            html += f'            <span class="tag-group"><span class="tag"><a href="{tag.name}/">{tag.name}</a></span></span>\n'
 
     html += "        </div>\n"
-
-    # Aliases
-    if img.aliases:
-        html += "        <h2>Aliases</h2>\n        <div>\n"
-        for alias, target in sorted(img.aliases.items()):
-            html += f'            <span class="alias">{alias} &rarr; {target}</span>\n'
-        html += "        </div>\n"
 
     # Variants
     if img.variants:
         html += "        <h2>Variants</h2>\n"
         for variant in img.variants:
+            # Build reverse alias mapping for variant
+            vtag_to_aliases: dict[str, list[str]] = {}
+            for alias, target in variant.aliases.items():
+                vtag_to_aliases.setdefault(target, []).append(alias)
+
             html += f'        <div style="margin-bottom: 15px;">\n'
             html += f'            <strong>{variant.name}</strong><br>\n'
             for vtag in variant.tags:
-                html += f'            <span class="variant"><a href="{vtag.name}/">{vtag.name}</a></span>\n'
-            if variant.aliases:
-                html += "            <br><small>Aliases: "
-                alias_parts = [f"{a} &rarr; {t}" for a, t in sorted(variant.aliases.items())]
-                html += ", ".join(alias_parts)
-                html += "</small>\n"
+                aliases_for_vtag = sorted(vtag_to_aliases.get(vtag.name, []))
+                if aliases_for_vtag:
+                    aliases_str = ", ".join(aliases_for_vtag)
+                    html += f'            <span class="variant-group"><span class="variant"><a href="{vtag.name}/">{vtag.name}</a></span><span class="variant-aliases">{aliases_str}</span></span>\n'
+                else:
+                    html += f'            <span class="variant-group"><span class="variant"><a href="{vtag.name}/">{vtag.name}</a></span></span>\n'
             html += "        </div>\n"
 
     # Versions table

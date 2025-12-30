@@ -130,6 +130,14 @@ class ModelResolver:
             # Generate aliases for variant tags
             variant_aliases = generate_semver_aliases(variant_tags)
 
+            # Also create variant aliases from base aliases
+            # e.g., if base has 9 → 9.0.300, variant gets 9-semantic → 9.0.300-semantic
+            suffix = variant_config.tag_suffix
+            for base_alias, base_target in aliases.items():
+                variant_alias = f"{base_alias}{suffix}"
+                variant_target = f"{base_target}{suffix}"
+                variant_aliases[variant_alias] = variant_target
+
             variants.append(Variant(
                 name=variant_config.name,
                 template_path=variant_template_path,
