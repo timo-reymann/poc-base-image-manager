@@ -1,6 +1,10 @@
 Proof of Concept for (CI) image management
 ===
 
+> **Note:** This is currently a conceptual proof of concept. The goal is to make this work out of the box on any CI provider (GitHub Actions, GitLab CI, etc.) and locally on macOS and Linux, where the entire toolchain runs in a prebuilt rootless container with no host dependencies beyond Docker.
+>
+> This codebase was heavily generated using [Claude Code](https://claude.ai/code). Code quality is not a priority - the focus is on demonstrating the overall concept and combining building blocks.
+
 Proof of concept for easy (CI) image management, which is also transferable to any kind of prebuilt images provided;
 e.g. runtime images.
 
@@ -40,6 +44,8 @@ Commands:
 When no image is specified for `build` or `test`, all images are processed in dependency order.
 
 Output in dist/:
+- `index.html` - Image catalog report
+- `<name>/index.html` - Per-image report
 - `Dockerfile` - Generated Dockerfile
 - `test.yml` - Test configuration
 - `image.tar` - Built image (after build)
@@ -204,14 +210,113 @@ Benefits:
 - CI pipeline generation (GitHub Actions, GitLab CI, etc.)
 - More intelligent version parsing and sorting (potentially via strategy that can be specified)
 
-## Implementation
+## Architecture
 
-- **Three-layer architecture**: Config → Model → Rendering
-- **Config layer**: Pydantic models for YAML validation
-- **Model layer**: Business logic for merging and resolution
-- **Rendering layer**: Jinja2 template generation
-- **Smart template discovery**: Convention with explicit overrides
-- **Variable merging**: Override cascade from image → tag → variant
-- **Variant tags**: Automatic generation with suffix-based naming
+### Three-Layer Architecture
 
-See [docs/architecture.md](docs/architecture.md) for details.
+**Config Layer** → **Model Layer** → **Rendering Layer**
+
+```
+image.yml → ConfigLoader → ImageConfig
+                              ↓
+                        ModelResolver
+                              ↓
+                           Image (with Tags and Variants)
+                              ↓
+                          Renderer
+                              ↓
+                      Dockerfile + test.yml + index.html
+```
+
+**Config Layer** (`manager/config.py`): Loads and validates YAML files using Pydantic. No business logic - just validation and parsing.
+
+**Model Layer** (`manager/models.py`): Transforms configs into resolved domain models. Handles template resolution, version/variable merging, and variant tag generation.
+
+**Rendering Layer** (`manager/rendering.py`): Generates output files from resolved models using Jinja2 templates.
+
+### Template Resolution
+
+Discovery order:
+1. Explicit template from config
+2. Variant-specific: `Dockerfile.{variant}.tmpl`
+3. Default: `Dockerfile.tmpl`
+
+### Variable Merging
+
+Override cascade (later wins): Image → Tag → Variant
+
+Both `versions` and `variables` use same merging strategy.
+
+### Variant Tags
+
+Variants inherit ALL base tags and apply suffix:
+- Base: `["3.13.7", "3.13.6"]`
+- Variant "browser" with suffix "-browser"
+- Result: `["3.13.7-browser", "3.13.6-browser"]`
+
+### Automatic Alias Generation
+
+The system automatically generates semantic version aliases without manual configuration.
+
+For tags like `9.0.100`, `9.0.200`, `9.1.50`:
+- Major alias: `9` → `9.1.50` (highest 9.x.x)
+- Minor aliases: `9.0` → `9.0.200`, `9.1` → `9.1.50`
+
+Variants automatically get aliases with suffix:
+- Variant tags: `9.0.100-semantic`, `9.0.200-semantic`
+- Aliases: `9-semantic` → `9.0.200-semantic`
+
+### Build Flow
+
+```
+1. Generate     images/*.yml → dist/<name>/<tag>/Dockerfile
+                            → dist/<name>/<tag>/test.yml
+                            → dist/index.html (catalog)
+                            → dist/<name>/index.html (per-image)
+
+2. Build        Dockerfile → buildctl → image.tar
+                          ↓
+                    S3 cache (import/export)
+                          ↓
+                    Push to registry
+
+3. SBOM         image.tar → syft scan → sbom.cyclonedx.json
+
+4. Test         image.tar → dind load → container-structure-test
+```
+
+### Container Architecture
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                     Host Machine                            │
+│                                                             │
+│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐      │
+│  │  buildkitd   │  │   registry   │  │    garage    │      │
+│  │  (rootless)  │  │  (registry:2)│  │   (S3 cache) │      │
+│  │  :8372       │  │  :5050       │  │   :3900      │      │
+│  └──────────────┘  └──────────────┘  └──────────────┘      │
+│                                                             │
+│  ┌──────────────┐                                          │
+│  │     dind     │  ← Testing only                          │
+│  │  (isolated)  │                                          │
+│  │  :2375       │                                          │
+│  └──────────────┘                                          │
+└─────────────────────────────────────────────────────────────┘
+```
+
+### SBOM Generation
+
+Generates Software Bill of Materials using [syft](https://github.com/anchore/syft):
+- Scans docker archives (`image.tar`) for installed packages
+- Default format: CycloneDX JSON (industry standard for vulnerability scanning)
+
+| Format | Output File | Use Case |
+|--------|-------------|----------|
+| `cyclonedx-json` | `sbom.cyclonedx.json` | Default, vulnerability scanning |
+| `spdx-json` | `sbom.spdx.json` | License compliance |
+| `json` | `sbom.syft.json` | Syft-specific tooling |
+
+### Dependency Resolution
+
+Images are sorted topologically based on FROM dependencies using Kahn's algorithm. Build order ensures base images exist before dependents.
