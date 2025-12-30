@@ -17,24 +17,30 @@ def print_usage() -> None:
     print("Commands:")
     print("  generate            Generate Dockerfiles and test configs from images/")
     print("  build [image:tag]   Build an image (or all images if none specified)")
+    print("  sbom [image:tag]    Generate SBOM for an image (or all images)")
     print("  test [image:tag]    Test an image (or all images if none specified)")
     print("  start [daemon]      Start daemons (buildkitd, registry, garage, dind, or all)")
     print("  stop [daemon]       Stop daemons (buildkitd, registry, garage, dind, or all)")
     print("  status [daemon]     Check daemon status")
     print()
-    print("Options (generate, build, test):")
+    print("Options (generate, build, sbom, test):")
     print("  --snapshot-id ID    Use snapshot ID for MR/branch builds")
     print("                      - generate: FROM refs include snapshot suffix")
     print("                      - build: push to registry with snapshot tag only")
-    print("                      - test: log snapshot context")
+    print("                      - sbom/test: log snapshot context")
     print()
     print("Build options:")
     print("  --no-cache          Disable S3 build cache")
+    print()
+    print("SBOM options:")
+    print("  --format FORMAT     SBOM format: cyclonedx-json (default), spdx-json, json")
     print()
     print("Examples:")
     print("  image-manager generate")
     print("  image-manager build                            # Build for main (release tags)")
     print("  image-manager build --no-cache                 # Build without cache")
+    print("  image-manager sbom base:2025.09                # Generate SBOM for image")
+    print("  image-manager sbom --format spdx-json          # Generate SPDX SBOM")
     print("  image-manager generate --snapshot-id mr-123    # Generate for MR")
     print("  image-manager build --snapshot-id mr-123       # Build for MR (snapshot tags)")
     print("  image-manager test --snapshot-id mr-123        # Test MR build")
@@ -300,6 +306,67 @@ def cmd_test(args: list[str]) -> int:
     return 0
 
 
+def cmd_sbom(args: list[str]) -> int:
+    """Generate SBOM for an image or all images."""
+    from manager.sbom import run_sbom
+
+    image_refs = []
+    format = "cyclonedx-json"
+    snapshot_id = None
+
+    # Parse options and image refs
+    i = 0
+    while i < len(args):
+        if args[i] == "--format" and i + 1 < len(args):
+            format = args[i + 1]
+            i += 2
+        elif args[i] == "--snapshot-id" and i + 1 < len(args):
+            snapshot_id = args[i + 1]
+            i += 2
+        elif args[i].startswith("--"):
+            print(f"Unknown argument: {args[i]}", file=sys.stderr)
+            return 1
+        else:
+            image_refs.append(args[i])
+            i += 1
+
+    # If no image specified, generate for all
+    if not image_refs:
+        try:
+            image_refs = get_all_image_refs()
+            if not image_refs:
+                print("No images found. Run 'image-manager generate' first.", file=sys.stderr)
+                return 1
+            msg = f"Generating SBOMs for all images ({len(image_refs)} total)"
+            if snapshot_id:
+                msg += f" [snapshot: {snapshot_id}]"
+            print(f"{msg}...")
+        except CyclicDependencyError as e:
+            print(f"Error: {e}", file=sys.stderr)
+            return 1
+
+    # Generate SBOM for each image
+    failed = []
+    for image_ref in image_refs:
+        print(f"\n{'='*60}")
+        print(f"SBOM {image_ref}")
+        print(f"{'='*60}")
+        try:
+            result = run_sbom(image_ref, format)
+            if result != 0:
+                failed.append(image_ref)
+        except (RuntimeError, FileNotFoundError, ValueError) as e:
+            print(f"Error: {e}", file=sys.stderr)
+            failed.append(image_ref)
+
+    if failed:
+        print(f"\nFailed to generate SBOM: {', '.join(failed)}", file=sys.stderr)
+        return 1
+
+    print(f"\nGenerated SBOMs for {len(image_refs)} image(s)")
+    return 0
+
+
 def cmd_start(args: list[str]) -> int:
     """Start daemons."""
     from manager.building import start_buildkitd, start_registry, start_garage
@@ -424,6 +491,8 @@ def main():
         sys.exit(cmd_generate(args))
     elif command == "build":
         sys.exit(cmd_build(args))
+    elif command == "sbom":
+        sys.exit(cmd_sbom(args))
     elif command == "test":
         sys.exit(cmd_test(args))
     elif command == "start":

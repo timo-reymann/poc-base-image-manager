@@ -31,6 +31,7 @@ uv run image-manager <command> [args]
 Commands:
 - `generate` - Generate Dockerfiles and test configs from `images/`
 - `build [image:tag] [--no-cache]` - Build image(s) to `dist/<name>/<tag>/image.tar`
+- `sbom [image:tag] [--format FORMAT]` - Generate SBOM for image(s)
 - `test [image:tag]` - Test image(s) using the tar archive
 - `start [daemon]` - Start daemons (buildkitd, registry, garage, dind, or all)
 - `stop [daemon]` - Stop daemons
@@ -42,6 +43,7 @@ Output in dist/:
 - `Dockerfile` - Generated Dockerfile
 - `test.yml` - Test configuration
 - `image.tar` - Built image (after build)
+- `sbom.cyclonedx.json` - SBOM in CycloneDX format (after sbom)
 
 ## Example
 
@@ -49,14 +51,22 @@ Output in dist/:
 # Generate Dockerfiles and test configs
 uv run image-manager generate
 
-# Build and test all images (in dependency order)
+# Build, generate SBOM, and test all images (in dependency order)
 uv run image-manager build
-uv run image-manager build --no-cache  # Build without S3 cache
+uv run image-manager sbom
 uv run image-manager test
 
-# Or build and test specific images
-uv run image-manager build base:2025.9
-uv run image-manager test base:2025.9
+# Or work with specific images
+uv run image-manager build base:2025.09
+uv run image-manager sbom base:2025.09
+uv run image-manager test base:2025.09
+
+# Build without S3 cache
+uv run image-manager build --no-cache
+
+# Generate SBOM in different formats
+uv run image-manager sbom --format spdx-json   # SPDX format
+uv run image-manager sbom --format json        # Syft native format
 
 # Stop daemons when done
 uv run image-manager stop

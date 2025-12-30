@@ -203,8 +203,35 @@ Test flow:
                           ↓
                     Push snapshot tag (if --snapshot-id)
 
-3. Test         image.tar → dind load → container-structure-test
+3. SBOM         image.tar → syft scan → sbom.cyclonedx.json
+
+4. Test         image.tar → dind load → container-structure-test
 ```
+
+### SBOM Generation (`manager/sbom.py`)
+
+Generates Software Bill of Materials using [syft](https://github.com/anchore/syft):
+
+- Scans docker archives (`image.tar`) for installed packages
+- Default format: CycloneDX JSON (industry standard for vulnerability scanning)
+- Also supports SPDX JSON and Syft native formats
+
+Key functions:
+- `get_syft_path()` - Returns path to bundled syft binary
+- `get_sbom_path()` - Determines output path for SBOM file
+- `run_sbom()` - Executes syft scan on image tar
+
+Output includes:
+- Package names, versions, and licenses
+- CPE (Common Platform Enumeration) references for CVE lookup
+- PURL (Package URL) identifiers for dependency tracking
+
+Supported formats:
+| Format | Output File | Use Case |
+|--------|-------------|----------|
+| `cyclonedx-json` | `sbom.cyclonedx.json` | Default, vulnerability scanning |
+| `spdx-json` | `sbom.spdx.json` | License compliance |
+| `json` | `sbom.syft.json` | Syft-specific tooling |
 
 ### Snapshot Tagging
 
@@ -214,12 +241,13 @@ The `--snapshot-id` flag is supported across all commands for MR/branch isolatio
 |---------|--------|
 | `generate --snapshot-id X` | FROM refs include snapshot suffix (e.g., `FROM base:2025.09-X`) |
 | `build --snapshot-id X` | Push snapshot tag only (e.g., `base:2025.09-X`) |
+| `sbom --snapshot-id X` | Log snapshot context |
 | `test --snapshot-id X` | Log snapshot context |
 
 This enables clean MR → main promotion:
 ```
-MR pipeline:   generate/build/test --snapshot-id mr-123 → base:2025.09-mr-123
-Main pipeline: generate/build/test (no flag)            → base:2025.09
+MR pipeline:   generate/build/sbom/test --snapshot-id mr-123 → base:2025.09-mr-123
+Main pipeline: generate/build/sbom/test (no flag)            → base:2025.09
 ```
 
 ## Dependency Resolution
