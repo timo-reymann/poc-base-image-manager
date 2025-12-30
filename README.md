@@ -210,6 +210,23 @@ Benefits:
 - CI pipeline generation (GitHub Actions, GitLab CI, etc.)
 - More intelligent version parsing and sorting (potentially via strategy that can be specified)
 
+## Open questions
+
+**Rootless testing**: Everything except `test` runs fully rootless:
+
+| Command | Rootless | Notes |
+|---------|----------|-------|
+| `generate` | ✅ | Pure Python |
+| `build` | ✅ | BuildKit is rootless |
+| `sbom` | ✅ | Syft scans tar directly |
+| `test` | ❌ | commandTests need container runtime |
+
+Options being considered:
+- Use Podman rootless with vfs storage driver (needs `seccomp=unconfined`)
+- Limit local testing to file/metadata tests only (no commandTests)
+- Run commandTests in CI only where dind/Podman is available
+- Make `build` optional so users can build with their own tooling and only use the manager for generate/sbom
+
 ## Architecture
 
 ### Three-Layer Architecture
