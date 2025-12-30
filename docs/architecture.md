@@ -154,6 +154,9 @@ Local registry for base image resolution between builds:
 - Built images are pushed via `crane push`
 - Dependent images pull bases from `host.docker.internal:5050` (macOS) or `localhost:5050` (Linux)
 - Configured as insecure in buildkitd for HTTP access
+- Supports snapshot tags for CI builds (e.g., `base:2025.09-run-12345`)
+
+In production, replaced by external registry (Harbor, ECR, GCR, etc.)
 
 ### Garage S3 Cache (`manager/building.py`)
 
@@ -170,6 +173,9 @@ Initialization flow:
 3. Create bucket `buildkit-cache`
 4. Create access key and save credentials
 5. Grant bucket permissions
+
+In production, replaced by external S3 (AWS S3, MinIO, Cloudflare R2, etc.).
+Same bucket used by local and CI builds enables shared layer caching.
 
 ### dind (`manager/testing.py`)
 
@@ -194,8 +200,26 @@ Test flow:
                     S3 cache (import/export)
                           ↓
                     Push to registry
+                          ↓
+                    Push snapshot tag (if --snapshot-id)
 
 3. Test         image.tar → dind load → container-structure-test
+```
+
+### Snapshot Tagging
+
+The `--snapshot-id` flag is supported across all commands for MR/branch isolation:
+
+| Command | Effect |
+|---------|--------|
+| `generate --snapshot-id X` | FROM refs include snapshot suffix (e.g., `FROM base:2025.09-X`) |
+| `build --snapshot-id X` | Push snapshot tag only (e.g., `base:2025.09-X`) |
+| `test --snapshot-id X` | Log snapshot context |
+
+This enables clean MR → main promotion:
+```
+MR pipeline:   generate/build/test --snapshot-id mr-123 → base:2025.09-mr-123
+Main pipeline: generate/build/test (no flag)            → base:2025.09
 ```
 
 ## Dependency Resolution

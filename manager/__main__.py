@@ -22,15 +22,22 @@ def print_usage() -> None:
     print("  stop [daemon]       Stop daemons (buildkitd, registry, garage, dind, or all)")
     print("  status [daemon]     Check daemon status")
     print()
+    print("Options (generate, build, test):")
+    print("  --snapshot-id ID    Use snapshot ID for MR/branch builds")
+    print("                      - generate: FROM refs include snapshot suffix")
+    print("                      - build: push to registry with snapshot tag only")
+    print("                      - test: log snapshot context")
+    print()
     print("Build options:")
     print("  --no-cache          Disable S3 build cache")
     print()
     print("Examples:")
     print("  image-manager generate")
-    print("  image-manager build              # Build all images with cache")
-    print("  image-manager build --no-cache   # Build without cache")
-    print("  image-manager build base:2025.9  # Build specific image")
-    print("  image-manager test               # Test all images")
+    print("  image-manager build                            # Build for main (release tags)")
+    print("  image-manager build --no-cache                 # Build without cache")
+    print("  image-manager generate --snapshot-id mr-123    # Generate for MR")
+    print("  image-manager build --snapshot-id mr-123       # Build for MR (snapshot tags)")
+    print("  image-manager test --snapshot-id mr-123        # Test MR build")
     print("  image-manager start")
     print("  image-manager status")
 
@@ -62,8 +69,22 @@ def get_all_image_refs() -> list[str]:
     return refs
 
 
-def cmd_generate() -> int:
+def cmd_generate(args: list[str]) -> int:
     """Generate Dockerfiles and test configs."""
+    snapshot_id = None
+
+    # Parse options
+    i = 0
+    while i < len(args):
+        if args[i] == "--snapshot-id" and i + 1 < len(args):
+            snapshot_id = args[i + 1]
+            i += 2
+        elif args[i].startswith("--"):
+            print(f"Unknown argument: {args[i]}", file=sys.stderr)
+            return 1
+        else:
+            i += 1
+
     dist_path = Path("dist")
     shutil.rmtree(dist_path.__str__(), ignore_errors=True)
 
@@ -104,7 +125,7 @@ def cmd_generate() -> int:
             tag_out_path = image_out_path.joinpath(tag.name)
             tag_out_path.mkdir(parents=True, exist_ok=True)
 
-            ctx = RenderContext(image=image, all=sorted_images, tag=tag, variant=None)
+            ctx = RenderContext(image=image, all=sorted_images, tag=tag, variant=None, snapshot_id=snapshot_id)
 
             rendered_dockerfile = render_dockerfile(ctx)
             tag_out_path.joinpath("Dockerfile").write_text(rendered_dockerfile)
@@ -118,7 +139,7 @@ def cmd_generate() -> int:
                 variant_out_path = image_out_path.joinpath(variant_tag.name)
                 variant_out_path.mkdir(parents=True, exist_ok=True)
 
-                ctx = RenderContext(image=image, all=sorted_images, tag=variant_tag, variant=variant)
+                ctx = RenderContext(image=image, all=sorted_images, tag=variant_tag, variant=variant, snapshot_id=snapshot_id)
 
                 rendered_dockerfile = render_dockerfile(ctx)
                 variant_out_path.joinpath("Dockerfile").write_text(rendered_dockerfile)
@@ -147,6 +168,7 @@ def cmd_build(args: list[str]) -> int:
     context_path = None
     image_refs = []
     use_cache = True
+    snapshot_id = None
 
     # Parse options and image refs
     i = 0
@@ -157,6 +179,9 @@ def cmd_build(args: list[str]) -> int:
         elif args[i] == "--no-cache":
             use_cache = False
             i += 1
+        elif args[i] == "--snapshot-id" and i + 1 < len(args):
+            snapshot_id = args[i + 1]
+            i += 2
         elif args[i].startswith("--"):
             print(f"Unknown argument: {args[i]}", file=sys.stderr)
             return 1
@@ -194,7 +219,7 @@ def cmd_build(args: list[str]) -> int:
         print(f"Building {image_ref}")
         print(f"{'='*60}")
         try:
-            result = run_build(image_ref, context_path, auto_start=False, use_cache=use_cache)
+            result = run_build(image_ref, context_path, auto_start=False, use_cache=use_cache, snapshot_id=snapshot_id)
             if result != 0:
                 failed.append(image_ref)
         except (RuntimeError, FileNotFoundError, ValueError) as e:
@@ -215,12 +240,16 @@ def cmd_test(args: list[str]) -> int:
 
     config_path = None
     image_refs = []
+    snapshot_id = None
 
     # Parse options and image refs
     i = 0
     while i < len(args):
         if args[i] == "--config" and i + 1 < len(args):
             config_path = Path(args[i + 1])
+            i += 2
+        elif args[i] == "--snapshot-id" and i + 1 < len(args):
+            snapshot_id = args[i + 1]
             i += 2
         elif args[i].startswith("--"):
             print(f"Unknown argument: {args[i]}", file=sys.stderr)
@@ -236,7 +265,10 @@ def cmd_test(args: list[str]) -> int:
             if not image_refs:
                 print("No images found. Run 'image-manager generate' first.", file=sys.stderr)
                 return 1
-            print(f"Testing all images ({len(image_refs)} total)...")
+            msg = f"Testing all images ({len(image_refs)} total)"
+            if snapshot_id:
+                msg += f" [snapshot: {snapshot_id}]"
+            print(f"{msg}...")
         except CyclicDependencyError as e:
             print(f"Error: {e}", file=sys.stderr)
             return 1
@@ -389,7 +421,7 @@ def main():
         print_usage()
         sys.exit(0)
     elif command == "generate":
-        sys.exit(cmd_generate())
+        sys.exit(cmd_generate(args))
     elif command == "build":
         sys.exit(cmd_build(args))
     elif command == "test":

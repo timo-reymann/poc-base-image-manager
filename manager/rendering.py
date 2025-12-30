@@ -12,13 +12,18 @@ class RenderContext:
     tag: Tag
     all: list[Image]
     variant: Variant | None = None
+    snapshot_id: str | None = None
 
 
 def _resolve_base_image(ctx: RenderContext) -> Callable[[str], str]:
     def impl(name: str):
         found = [i for i in ctx.all if i.name == name and i.is_base_image]
         if len(found) == 1:
-            return found[0].full_qualified_base_image_name
+            base_ref = found[0].full_qualified_base_image_name
+            # Append snapshot_id if provided (for MR/branch builds)
+            if ctx.snapshot_id:
+                base_ref = f"{base_ref}-{ctx.snapshot_id}"
+            return base_ref
         else:
             raise RuntimeError(f"Could not resolve base image {name}")
 

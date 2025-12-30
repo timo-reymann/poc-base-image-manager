@@ -759,12 +759,13 @@ def get_local_images() -> set[str]:
     return images
 
 
-def rewrite_dockerfile_for_registry(dockerfile_path: Path, local_images: set[str]) -> str:
+def rewrite_dockerfile_for_registry(dockerfile_path: Path, local_images: set[str], snapshot_id: str | None = None) -> str:
     """Rewrite Dockerfile FROM lines to use local registry for local base images.
 
     Args:
         dockerfile_path: Path to the original Dockerfile
-        local_images: Set of image refs available in local registry
+        local_images: Set of image refs available in local registry (without snapshot suffix)
+        snapshot_id: Optional snapshot ID - used to match snapshot-suffixed FROM refs
 
     Returns:
         Modified Dockerfile content
@@ -782,7 +783,13 @@ def rewrite_dockerfile_for_registry(dockerfile_path: Path, local_images: set[str
         suffix = match.group(3)
 
         # Check if this image is one of our local images
-        if image_ref in local_images:
+        # Also check for snapshot-suffixed refs (e.g., base:2025.09-mr-123 → base:2025.09)
+        base_ref = image_ref
+        if snapshot_id and image_ref.endswith(f"-{snapshot_id}"):
+            base_ref = image_ref[: -len(f"-{snapshot_id}")]
+
+        if base_ref in local_images:
+            # Use the full image_ref (which may include snapshot suffix from generate)
             return f"{prefix}{registry}/{image_ref}{suffix}"
 
         return match.group(0)
@@ -834,6 +841,7 @@ def run_build(
     context_path: Path | None = None,
     auto_start: bool = True,
     use_cache: bool = True,
+    snapshot_id: str | None = None,
 ) -> int:
     """Run buildctl to build an image.
 
@@ -846,6 +854,8 @@ def run_build(
                       will be derived from dist/<name>/<tag>/
         auto_start: If True, automatically start buildkitd and registry if not running
         use_cache: If True, use S3 cache via Garage for faster builds
+        snapshot_id: Optional snapshot identifier (e.g., CI run ID) to append to
+                     registry tags. Creates additional tag like 'base:2025.09-run-12345'
 
     Returns:
         Exit code from buildctl
@@ -892,7 +902,7 @@ def run_build(
     local_images = get_local_images()
 
     # Use temp dir for modified Dockerfile if needed
-    modified_content = rewrite_dockerfile_for_registry(dockerfile_path, local_images)
+    modified_content = rewrite_dockerfile_for_registry(dockerfile_path, local_images, snapshot_id)
     original_content = dockerfile_path.read_text()
 
     if modified_content != original_content:
@@ -931,9 +941,15 @@ def run_build(
 
     if result.returncode == 0:
         print(f"Image saved to: {tar_path}")
-        # Push to local registry for dependent builds
-        if push_to_registry(tar_path, image_ref):
-            print(f"Image pushed to registry: {registry}/{image_ref}")
+
+        # Determine registry tag: snapshot (MR/branch) or standard (main)
+        if snapshot_id:
+            registry_ref = f"{image_ref}-{snapshot_id}"
+        else:
+            registry_ref = image_ref
+
+        if push_to_registry(tar_path, registry_ref):
+            print(f"Image pushed to registry: {registry}/{registry_ref}")
         else:
             print("Warning: Failed to push to registry", file=sys.stderr)
 

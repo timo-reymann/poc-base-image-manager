@@ -101,6 +101,7 @@ The local containerized registry and S3 cache are for development/PoC purposes. 
 **Registry** → External container registry (e.g., Harbor, ECR, GCR, Docker Hub)
 - Configure via registry endpoint and credentials
 - Base images pushed to and pulled from shared registry
+- Stores both release tags and CI snapshot tags
 
 **S3 Cache** → External S3-compatible storage (e.g., AWS S3, MinIO, Cloudflare R2)
 - Same cache bucket used locally and in CI for shared layer caching
@@ -126,6 +127,55 @@ The local containerized registry and S3 cache are for development/PoC purposes. 
        │  (external)   │
        └───────────────┘
 ```
+
+### Snapshot builds (CI pipelines)
+
+Use `--snapshot-id` across all commands for MR/branch pipelines:
+
+```shell
+# MR/branch pipeline: full workflow with snapshot ID
+uv run image-manager generate --snapshot-id "mr-${MR_ID}"  # FROM refs use snapshot
+uv run image-manager build --snapshot-id "mr-${MR_ID}"     # Push snapshot tags only
+uv run image-manager test --snapshot-id "mr-${MR_ID}"      # Test with snapshot context
+
+# Main pipeline: release workflow (no snapshot)
+uv run image-manager generate   # FROM refs use release tags
+uv run image-manager build      # Push release tags
+uv run image-manager test       # Test release
+```
+
+How `--snapshot-id` affects each command:
+- **generate**: Dependent images reference snapshot base tags (e.g., `FROM base:2025.09-mr-123`)
+- **build**: Pushes to registry with snapshot tag only (e.g., `base:2025.09-mr-123`)
+- **test**: Logs snapshot context for traceability
+
+This enables a clean promotion workflow:
+
+```
+┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐
+│   MR/Branch     │     │     Main        │     │    Registry     │
+│   Pipeline      │     │   Pipeline      │     │                 │
+└────────┬────────┘     └────────┬────────┘     └────────┬────────┘
+         │                       │                       │
+         │ --snapshot-id mr-123  │                       │
+         ├──────────────────────────────────────────────►│
+         │                       │      base:2025.09-mr-123
+         │                       │      python:3.13-mr-123
+         │                       │                       │
+         │    (merge to main)    │                       │
+         │ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─►│                       │
+         │                       │ (no snapshot-id)      │
+         │                       ├──────────────────────►│
+         │                       │      base:2025.09     │
+         │                       │      python:3.13      │
+```
+
+Benefits:
+- **Isolation**: MR builds don't overwrite release tags
+- **Traceability**: Every MR has unique, immutable snapshot tags
+- **Clean promotion**: Main builds release tags, MRs build snapshots
+- **Parallel safety**: Multiple MRs don't conflict
+- **Dependency consistency**: Generated Dockerfiles reference correct snapshot bases
 
 ## Features
 
