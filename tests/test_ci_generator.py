@@ -80,3 +80,37 @@ def test_build_ci_context_with_dependencies(tmp_path):
     # python depends on base
     python_ctx = next(i for i in context["images"] if i["name"] == "python")
     assert python_ctx["dependencies"] == ["base"]
+
+
+def test_generate_gitlab_ci(tmp_path):
+    """Test generating GitLab CI configuration file."""
+    from manager.ci_generator import generate_gitlab_ci
+
+    # Create a minimal template file for dependency extraction
+    tpl = tmp_path / "src" / "Dockerfile.tpl"
+    tpl.parent.mkdir(parents=True)
+    tpl.write_text("FROM ubuntu:22.04")
+
+    image = Image(
+        name="base",
+        path=tmp_path / "src",
+        template_path=tpl,
+        tags=[Tag(name="2025.09", versions={}, variables={})],
+        variants=[],
+        extends=None,
+        versions={},
+        variables={},
+        is_base_image=False,
+        aliases={},
+    )
+
+    output_path = tmp_path / ".gitlab" / "ci" / "images.yml"
+    generate_gitlab_ci([image], output_path)
+
+    assert output_path.exists()
+    content = output_path.read_text()
+    assert "stages:" in content
+    assert "build-base-amd64:" in content
+    assert "build-base-arm64:" in content
+    assert "manifest-base:" in content
+    assert "test-base:" in content

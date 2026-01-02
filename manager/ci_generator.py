@@ -2,7 +2,12 @@
 
 from datetime import datetime, timezone
 from pathlib import Path
+
+from jinja2 import Environment, FileSystemLoader
+
 from manager.dependency_graph import extract_dependencies
+
+TEMPLATES_DIR = Path(__file__).parent.parent / "templates"
 
 
 def build_ci_context(images: list) -> dict:
@@ -36,3 +41,22 @@ def build_ci_context(images: list) -> dict:
         "platforms": ["amd64", "arm64"],
         "generated_at": datetime.now(timezone.utc).isoformat(),
     }
+
+
+def generate_gitlab_ci(images: list, output_path: Path) -> None:
+    """Generate GitLab CI configuration file.
+
+    Args:
+        images: List of Image objects (should be in dependency order)
+        output_path: Path to write the generated CI config
+    """
+    env = Environment(
+        loader=FileSystemLoader(TEMPLATES_DIR / "gitlab"),
+        keep_trailing_newline=True,
+    )
+    template = env.get_template("pipeline.yml.j2")
+
+    context = build_ci_context(images)
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text(template.render(**context))
