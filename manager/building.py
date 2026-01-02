@@ -334,78 +334,16 @@ def get_registry_addr_for_buildkit() -> str:
     return f"localhost:{REGISTRY_PORT}"
 
 
-def is_registry_running() -> bool:
-    """Check if the registry container is running."""
+def check_registry_connection() -> bool:
+    """Check if registry is reachable."""
     try:
-        client = get_docker_client()
-        container = client.containers.get(REGISTRY_CONTAINER_NAME)
-        return container.status == "running"
-    except NotFound:
-        return False
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.settimeout(1)
+        result = sock.connect_ex(('localhost', REGISTRY_PORT))
+        sock.close()
+        return result == 0
     except Exception:
         return False
-
-
-def start_registry() -> int:
-    """Start local registry container."""
-    if is_registry_running():
-        print("registry container is already running")
-        return 0
-
-    client = get_docker_client()
-
-    # Remove any existing container
-    try:
-        old = client.containers.get(REGISTRY_CONTAINER_NAME)
-        old.remove(force=True)
-    except NotFound:
-        pass
-
-    print(f"Starting registry container ({REGISTRY_IMAGE})...")
-    try:
-        # Registry always listens on 5000 internally, map to external port
-        client.containers.run(
-            REGISTRY_IMAGE,
-            name=REGISTRY_CONTAINER_NAME,
-            detach=True,
-            ports={"5000/tcp": ("127.0.0.1", REGISTRY_PORT)},
-        )
-    except APIError as e:
-        print(f"Failed to start registry container: {e}", file=sys.stderr)
-        return 1
-
-    # Wait for registry to be ready
-    print("Waiting for registry to be ready...")
-    for _ in range(50):
-        if is_port_open(REGISTRY_PORT):
-            print(f"registry container started (addr: {get_registry_addr()})")
-            return 0
-        time.sleep(0.1)
-
-    print("Warning: registry started but port not yet available", file=sys.stderr)
-    return 0
-
-
-def stop_registry() -> int:
-    """Stop the registry container."""
-    try:
-        client = get_docker_client()
-        container = client.containers.get(REGISTRY_CONTAINER_NAME)
-        container.remove(force=True)
-        print("Stopped registry container")
-    except NotFound:
-        print("registry container was not running")
-    except Exception as e:
-        print(f"Error stopping registry: {e}", file=sys.stderr)
-        return 1
-    return 0
-
-
-def ensure_registry() -> bool:
-    """Ensure registry is running, start if needed."""
-    if is_registry_running():
-        return True
-    return start_registry() == 0
 
 
 # --- Garage (S3 cache) management ---
@@ -1129,8 +1067,8 @@ def create_manifest_from_registry(
         Exit code (0 for success)
     """
     if auto_start:
-        if not ensure_registry():
-            print("Error: Failed to start registry", file=sys.stderr)
+        if not check_registry_connection():
+            print("Error: Registry not reachable. Start it with: docker compose up -d registry", file=sys.stderr)
             return 1
 
     crane = get_crane_path()
@@ -1210,8 +1148,8 @@ def run_build(
         if not ensure_buildkitd():
             print("Error: Failed to start buildkitd", file=sys.stderr)
             return 1
-        if not ensure_registry():
-            print("Error: Failed to start registry", file=sys.stderr)
+        if not check_registry_connection():
+            print("Error: Registry not reachable. Start it with: docker compose up -d registry", file=sys.stderr)
             return 1
         if use_cache and not ensure_garage():
             print("Warning: Failed to start garage, building without cache", file=sys.stderr)
