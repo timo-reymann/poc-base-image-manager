@@ -37,6 +37,9 @@ def print_usage() -> None:
     print("SBOM options:")
     print("  --format FORMAT     SBOM format: cyclonedx-json (default), spdx-json, json")
     print()
+    print("Test options:")
+    print("  --platform PLAT     Test specific platform (default: native)")
+    print()
     print("Examples:")
     print("  image-manager generate")
     print("  image-manager build                            # Build for main (release tags)")
@@ -253,10 +256,12 @@ def cmd_build(args: list[str]) -> int:
 def cmd_test(args: list[str]) -> int:
     """Test an image or all images."""
     from manager.testing import run_test, ensure_dind
+    from manager.building import get_native_platform, platform_to_path
 
     config_path = None
     image_refs = []
     snapshot_id = None
+    platform = None  # Will default to native
 
     # Parse options and image refs
     i = 0
@@ -266,6 +271,9 @@ def cmd_test(args: list[str]) -> int:
             i += 2
         elif args[i] == "--snapshot-id" and i + 1 < len(args):
             snapshot_id = args[i + 1]
+            i += 2
+        elif args[i] == "--platform" and i + 1 < len(args):
+            platform = args[i + 1]
             i += 2
         elif args[i].startswith("--"):
             print(f"Unknown argument: {args[i]}", file=sys.stderr)
