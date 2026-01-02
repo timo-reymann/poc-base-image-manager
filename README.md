@@ -100,6 +100,24 @@ uv run image-manager sbom --format json        # Syft native format
 uv run image-manager stop
 ```
 
+## Configuration
+
+Create `.image-manager.yml` in your project root to customize settings:
+
+```yaml
+# Custom registry
+registry:
+  url: my-registry.example.com:5000
+
+# With authentication (using environment variables)
+registry:
+  url: my-registry.example.com:5000
+  username: ${REGISTRY_USERNAME}
+  password: ${REGISTRY_PASSWORD}
+```
+
+If no config file exists, defaults to `localhost:5050`.
+
 ### Infrastructure setup
 
 Start the infrastructure services (registry, cache):
