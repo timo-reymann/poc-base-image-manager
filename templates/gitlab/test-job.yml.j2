@@ -1,0 +1,8 @@
+{# templates/gitlab/test-job.yml.j2 #}
+test-{{ image.name }}:
+  stage: test
+  needs:
+    - manifest-{{ image.name }}
+  script:
+    - uv run image-manager test {{ image.name }} --snapshot-id "$SNAPSHOT_ID"
+
