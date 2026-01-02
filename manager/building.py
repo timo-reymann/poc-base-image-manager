@@ -3,6 +3,7 @@
 import os
 import platform
 import re
+import shutil
 import signal
 import socket
 import subprocess
@@ -1104,24 +1105,34 @@ def run_build(
     auto_start: bool = True,
     use_cache: bool = True,
     snapshot_id: str | None = None,
+    platforms: list[str] | None = None,
 ) -> int:
-    """Run buildctl to build an image.
+    """Run buildctl to build an image for one or more platforms.
 
-    Outputs the image as a tar archive in dist/<name>/<tag>/image.tar.
-    Also pushes to local registry for dependent builds.
+    By default, builds for all supported platforms and creates a multi-platform
+    manifest. Use platforms parameter to limit to specific platform(s).
 
     Args:
         image_ref: Image reference in format 'name:tag'
-        context_path: Optional explicit path to build context. If not provided,
-                      will be derived from dist/<name>/<tag>/
-        auto_start: If True, automatically start buildkitd and registry if not running
-        use_cache: If True, use S3 cache via Garage for faster builds
-        snapshot_id: Optional snapshot identifier (e.g., CI run ID) to append to
-                     registry tags. Creates additional tag like 'base:2025.09-run-12345'
+        context_path: Optional explicit path to build context
+        auto_start: If True, automatically start buildkitd and registry
+        use_cache: If True, use S3 cache via Garage
+        snapshot_id: Optional snapshot identifier for registry tags
+        platforms: List of platforms to build. None = all platforms.
 
     Returns:
         Exit code from buildctl
     """
+    # Normalize platforms
+    if platforms is None:
+        platforms = SUPPORTED_PLATFORMS.copy()
+    else:
+        platforms = [normalize_platform(p) for p in platforms]
+
+    # Check if we need emulation
+    native = get_native_platform()
+    needs_cross = any(p != native for p in platforms)
+
     if auto_start:
         if not ensure_buildkitd():
             print("Error: Failed to start buildkitd", file=sys.stderr)
@@ -1133,89 +1144,64 @@ def run_build(
             print("Warning: Failed to start garage, building without cache", file=sys.stderr)
             use_cache = False
 
+    # Setup emulation if needed
+    if needs_cross:
+        if not ensure_binfmt():
+            print(f"Warning: Emulation setup failed, limiting to native platform ({native})", file=sys.stderr)
+            platforms = [native]
+
     if context_path is None:
         context_path = find_build_context(image_ref)
 
-    tar_path = get_image_tar_path(image_ref)
+    print(f"Building {image_ref} for platforms: {', '.join(platforms)}")
 
-    buildctl = get_buildctl_path()
-    addr = get_socket_addr()
-    registry = get_registry_addr()
-
-    # Build cache arguments if garage is available
-    cache_args = []
-    if use_cache:
-        creds = get_garage_credentials()
-        if creds:
-            access_key, secret_key = creds
-            s3_endpoint = get_garage_s3_endpoint_for_buildkit()
-            # Cache name based on image name (without tag) for better cache sharing
-            cache_name = image_ref.split(":")[0]
-            cache_args = [
-                "--export-cache", f"type=s3,endpoint_url={s3_endpoint},bucket={GARAGE_BUCKET},region={GARAGE_REGION},name={cache_name},access_key_id={access_key},secret_access_key={secret_key},use_path_style=true,mode=max",
-                "--import-cache", f"type=s3,endpoint_url={s3_endpoint},bucket={GARAGE_BUCKET},region={GARAGE_REGION},name={cache_name},access_key_id={access_key},secret_access_key={secret_key},use_path_style=true",
-            ]
-            print(f"Using S3 cache: {s3_endpoint}/{GARAGE_BUCKET}/{cache_name}")
+    # Build each platform
+    successful_platforms = []
+    for plat in platforms:
+        result = run_build_platform(
+            image_ref=image_ref,
+            plat=plat,
+            context_path=context_path,
+            use_cache=use_cache,
+            snapshot_id=snapshot_id,
+        )
+        if result == 0:
+            successful_platforms.append(plat)
         else:
-            print("Warning: No garage credentials found, building without cache", file=sys.stderr)
+            print(f"Failed to build for {plat}", file=sys.stderr)
 
-    # Check if we need to rewrite FROM for local base images
-    dockerfile_path = context_path / "Dockerfile"
-    local_images = get_local_images()
+    if not successful_platforms:
+        print("Error: All platform builds failed", file=sys.stderr)
+        return 1
 
-    # Use temp dir for modified Dockerfile if needed
-    modified_content = rewrite_dockerfile_for_registry(dockerfile_path, local_images, snapshot_id)
-    original_content = dockerfile_path.read_text()
+    # Create multi-platform manifest if multiple platforms built
+    if len(successful_platforms) > 1:
+        manifest_result = create_multiplatform_manifest(
+            image_ref=image_ref,
+            platforms=successful_platforms,
+            snapshot_id=snapshot_id,
+        )
+        if manifest_result != 0:
+            print("Warning: Failed to create multi-platform manifest", file=sys.stderr)
+    elif len(successful_platforms) == 1:
+        # Single platform: copy to main image.tar location for compatibility
+        plat = successful_platforms[0]
+        platform_tar = get_platform_tar_path(image_ref, plat)
+        main_tar = get_image_tar_path(image_ref)
 
-    if modified_content != original_content:
-        # Create temp directory with modified Dockerfile
-        with tempfile.TemporaryDirectory() as tmpdir:
-            tmp_dockerfile = Path(tmpdir) / "Dockerfile"
-            tmp_dockerfile.write_text(modified_content)
-            print(f"Rewriting FROM to use registry for local base images")
+        if platform_tar.exists():
+            main_tar.parent.mkdir(parents=True, exist_ok=True)
+            if main_tar.exists() or main_tar.is_symlink():
+                main_tar.unlink()
+            shutil.copy2(platform_tar, main_tar)
+            print(f"Image saved to: {main_tar}")
 
-            cmd = [
-                str(buildctl),
-                "--addr", addr,
-                "build",
-                "--frontend", "dockerfile.v0",
-                "--local", f"context={context_path}",
-                "--local", f"dockerfile={tmpdir}",
-                "--output", f"type=docker,name={image_ref},dest={tar_path}",
-                "--opt", f"build-arg:BUILDKIT_INSECURE_REGISTRY={registry}",
-            ] + cache_args
+    failed_count = len(platforms) - len(successful_platforms)
+    if failed_count > 0:
+        print(f"Warning: {failed_count} platform(s) failed to build", file=sys.stderr)
+        return 1 if not successful_platforms else 0
 
-            print(f"Running: {' '.join(cmd)}")
-            result = subprocess.run(cmd)
-    else:
-        cmd = [
-            str(buildctl),
-            "--addr", addr,
-            "build",
-            "--frontend", "dockerfile.v0",
-            "--local", f"context={context_path}",
-            "--local", f"dockerfile={context_path}",
-            "--output", f"type=docker,name={image_ref},dest={tar_path}",
-        ] + cache_args
-
-        print(f"Running: {' '.join(cmd)}")
-        result = subprocess.run(cmd)
-
-    if result.returncode == 0:
-        print(f"Image saved to: {tar_path}")
-
-        # Determine registry tag: snapshot (MR/branch) or standard (main)
-        if snapshot_id:
-            registry_ref = f"{image_ref}-{snapshot_id}"
-        else:
-            registry_ref = image_ref
-
-        if push_to_registry(tar_path, registry_ref):
-            print(f"Image pushed to registry: {registry}/{registry_ref}")
-        else:
-            print("Warning: Failed to push to registry", file=sys.stderr)
-
-    return result.returncode
+    return 0
 
 
 def main() -> None:
