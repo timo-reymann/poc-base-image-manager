@@ -34,7 +34,12 @@ uv run image-manager <command> [args]
 
 Commands:
 - `generate` - Generate Dockerfiles and test configs from `images/`
-- `build [image:tag] [--no-cache]` - Build image(s) to `dist/<name>/<tag>/image.tar`
+- `build [image:tag] [options]` - Build image(s) to `dist/<name>/<tag>/image.tar`
+
+Build options:
+  --no-cache          Disable S3 build cache
+  --platform PLAT     Build for specific platform only (amd64, arm64)
+                      Default: builds linux/amd64 + linux/arm64 with multi-platform manifest
 - `sbom [image:tag] [--format FORMAT]` - Generate SBOM for image(s)
 - `test [image:tag]` - Test image(s) using the tar archive
 - `start [daemon]` - Start daemons (buildkitd, registry, garage, dind, or all)
@@ -46,10 +51,12 @@ When no image is specified for `build` or `test`, all images are processed in de
 Output in dist/:
 - `index.html` - Image catalog report
 - `<name>/index.html` - Per-image report
+- `<name>/<tag>/linux-amd64/image.tar` - AMD64 platform image
+- `<name>/<tag>/linux-arm64/image.tar` - ARM64 platform image
+- `<name>/<tag>/image.tar` - Multi-platform OCI index (or single platform copy)
 - `Dockerfile` - Generated Dockerfile
 - `test.yml` - Test configuration
-- `image.tar` - Built image (after build)
-- `sbom.cyclonedx.json` - SBOM in CycloneDX format (after sbom)
+- `sbom.cyclonedx.json` - SBOM in CycloneDX format (per platform)
 
 ## Example
 
@@ -69,6 +76,13 @@ uv run image-manager test base:2025.09
 
 # Build without S3 cache
 uv run image-manager build --no-cache
+
+# Build for specific platform
+uv run image-manager build base:2025.09 --platform amd64
+uv run image-manager build base:2025.09 --platform arm64
+
+# Build all platforms (default)
+uv run image-manager build base:2025.09
 
 # Generate SBOM in different formats
 uv run image-manager sbom --format spdx-json   # SPDX format
