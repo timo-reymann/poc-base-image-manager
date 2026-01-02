@@ -20,12 +20,13 @@ def get_syft_path() -> Path:
     return binary
 
 
-def get_sbom_path(image_ref: str, format: str = "cyclonedx-json") -> Path:
+def get_sbom_path(image_ref: str, format: str = "cyclonedx-json", plat: str | None = None) -> Path:
     """Get the output path for an SBOM file.
 
     Args:
         image_ref: Image reference in format 'name:tag'
         format: SBOM format (spdx-json, cyclonedx-json, etc.)
+        plat: Optional platform (e.g., 'linux/amd64')
 
     Returns:
         Path to the SBOM output file
@@ -45,32 +46,26 @@ def get_sbom_path(image_ref: str, format: str = "cyclonedx-json") -> Path:
     }
     ext = ext_map.get(format, f"{format}.json")
 
+    if plat:
+        platform_dir = plat.replace("/", "-")
+        return Path("dist") / name / tag / platform_dir / f"sbom.{ext}"
+
     return Path("dist") / name / tag / f"sbom.{ext}"
 
 
-def run_sbom(
-    image_ref: str,
-    format: str = "cyclonedx-json",
-) -> int:
-    """Generate SBOM for a built image.
+def _run_syft(tar_path: Path, sbom_path: Path, format: str, image_ref: str) -> int:
+    """Run syft on a tar file.
 
     Args:
-        image_ref: Image reference in format 'name:tag'
-        format: Output format (spdx-json, cyclonedx-json, json, etc.)
+        tar_path: Path to the image tar file
+        sbom_path: Path to write the SBOM output
+        format: SBOM format (spdx-json, cyclonedx-json, etc.)
+        image_ref: Image reference for HTML report generation
 
     Returns:
         Exit code from syft
     """
-    tar_path = get_image_tar_path(image_ref)
-
-    if not tar_path.exists():
-        print(f"Error: Image tar not found: {tar_path}", file=sys.stderr)
-        print(f"Run 'image-manager build {image_ref}' first.", file=sys.stderr)
-        return 1
-
     syft = get_syft_path()
-    sbom_path = get_sbom_path(image_ref, format)
-
     cmd = [
         str(syft),
         "scan",
@@ -78,9 +73,7 @@ def run_sbom(
         "-o", f"{format}={sbom_path}",
     ]
 
-    print(f"Generating SBOM ({format}) for {image_ref}...")
     print(f"Running: {' '.join(cmd)}")
-
     result = subprocess.run(cmd)
 
     if result.returncode == 0:
@@ -93,6 +86,57 @@ def run_sbom(
         print(f"Failed to generate SBOM", file=sys.stderr)
 
     return result.returncode
+
+
+def run_sbom(
+    image_ref: str,
+    format: str = "cyclonedx-json",
+) -> int:
+    """Generate SBOM for all platform variants of an image.
+
+    Args:
+        image_ref: Image reference in format 'name:tag'
+        format: Output format (spdx-json, cyclonedx-json, json, etc.)
+
+    Returns:
+        Exit code from syft
+    """
+    if ":" not in image_ref:
+        raise ValueError(f"Invalid image reference '{image_ref}', expected format: name:tag")
+
+    name, tag = image_ref.split(":", 1)
+    base_path = Path("dist") / name / tag
+
+    # Find platform directories
+    if base_path.exists():
+        platform_dirs = [d for d in base_path.iterdir() if d.is_dir() and d.name.startswith("linux-")]
+    else:
+        platform_dirs = []
+
+    if platform_dirs:
+        # Multi-platform: generate SBOM for each
+        for plat_dir in platform_dirs:
+            tar_path = plat_dir / "image.tar"
+            if tar_path.exists():
+                plat = plat_dir.name.replace("-", "/")
+                sbom_path = get_sbom_path(image_ref, format, plat)
+                print(f"Generating SBOM for {image_ref} ({plat_dir.name})...")
+                result = _run_syft(tar_path, sbom_path, format, image_ref)
+                if result != 0:
+                    return result
+        return 0
+    else:
+        # Single platform fallback
+        tar_path = get_image_tar_path(image_ref)
+
+        if not tar_path.exists():
+            print(f"Error: Image tar not found: {tar_path}", file=sys.stderr)
+            print(f"Run 'image-manager build {image_ref}' first.", file=sys.stderr)
+            return 1
+
+        sbom_path = get_sbom_path(image_ref, format)
+        print(f"Generating SBOM ({format}) for {image_ref}...")
+        return _run_syft(tar_path, sbom_path, format, image_ref)
 
 
 def parse_cyclonedx(sbom_path: Path) -> dict:
