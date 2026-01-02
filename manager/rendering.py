@@ -72,6 +72,7 @@ class RenderContext:
     all: list[Image]
     variant: Variant | None = None
     snapshot_id: str | None = None
+    has_rootfs: bool = False
 
 
 def _resolve_base_image(ctx: RenderContext) -> Callable[[str], str]:
@@ -138,11 +139,21 @@ def render_dockerfile(context: RenderContext):
             "base_image": f"{context.image.name}:{base_tag_name}",
         }
         tpl_file = context.variant.template_path
+        rootfs_user = context.variant.rootfs_user
+        rootfs_copy = context.variant.rootfs_copy
     else:
         tpl_file = context.image.dockerfile_template_path
+        rootfs_user = context.tag.rootfs_user
+        rootfs_copy = context.tag.rootfs_copy
 
     tpl = env.from_string(tpl_file.read_text())
-    return tpl.render(image=context.image, tag=context.tag, **variant_args)
+    rendered = tpl.render(image=context.image, tag=context.tag, **variant_args)
+
+    # Inject COPY rootfs/ if conditions are met
+    if context.has_rootfs and rootfs_copy:
+        rendered = inject_rootfs_copy(rendered, rootfs_user)
+
+    return rendered
 
 
 def generate_image_report(images: list[Image], snapshot_id: str | None = None) -> Path:
