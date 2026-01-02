@@ -13,6 +13,7 @@ import time
 from pathlib import Path
 
 import docker
+from manager.config import get_registry_url, get_registry_auth
 from manager.rendering import generate_tag_report
 from docker.errors import NotFound, APIError
 
@@ -317,30 +318,39 @@ def ensure_buildkitd() -> bool:
 # --- Registry management ---
 
 def get_registry_addr() -> str:
-    """Get the local registry address for external access (host)."""
-    return f"localhost:{REGISTRY_PORT}"
+    """Get the registry host for local operations."""
+    return get_registry_url()
 
 
 def get_registry_addr_for_buildkit() -> str:
-    """Get the local registry address as seen by buildkitd.
+    """Get the registry host as seen from buildkit container."""
+    registry_url = get_registry_url()
 
-    On macOS, buildkitd runs in a container and needs host.docker.internal.
-    On Linux, buildkitd runs natively and can use localhost.
-    """
-    if platform.system().lower() == "darwin":
-        return f"host.docker.internal:{REGISTRY_PORT}"
-    return f"localhost:{REGISTRY_PORT}"
+    # If it's localhost, buildkit needs host.docker.internal
+    if registry_url.startswith("localhost:"):
+        port = registry_url.split(":")[1]
+        return f"host.docker.internal:{port}"
+
+    return registry_url
 
 
 def check_registry_connection() -> bool:
-    """Check if registry is reachable."""
+    """Check if the registry is reachable."""
+    registry_url = get_registry_url()
+
+    # Parse host and port from URL
+    if ":" in registry_url:
+        host, port_str = registry_url.rsplit(":", 1)
+        port = int(port_str)
+    else:
+        host = registry_url
+        port = 5000  # Default registry port
+
     try:
-        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        sock.settimeout(1)
-        result = sock.connect_ex(('localhost', REGISTRY_PORT))
-        sock.close()
-        return result == 0
-    except Exception:
+        result = socket.create_connection((host, port), timeout=2)
+        result.close()
+        return True
+    except (socket.error, socket.timeout):
         return False
 
 
@@ -785,7 +795,7 @@ def create_manifest_from_registry(
         Exit code (0 for success)
     """
     if not check_registry_connection():
-        print("Error: Registry not reachable at localhost:5050", file=sys.stderr)
+        print(f"Error: Registry not reachable at {get_registry_url()}", file=sys.stderr)
         print("Run 'docker compose up -d' to start infrastructure services.", file=sys.stderr)
         return 1
 
@@ -852,7 +862,7 @@ def run_build(
     """
     # Check registry connection
     if not check_registry_connection():
-        print("Error: Registry not reachable at localhost:5050", file=sys.stderr)
+        print(f"Error: Registry not reachable at {get_registry_url()}", file=sys.stderr)
         print("Run 'docker compose up -d' to start infrastructure services.", file=sys.stderr)
         return 1
 
