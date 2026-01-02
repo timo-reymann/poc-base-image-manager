@@ -1,0 +1,3 @@
+# This file demonstrates rootfs layering
+# This version-level file REPLACES the image-level file
+level=version

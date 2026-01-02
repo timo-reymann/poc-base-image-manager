@@ -1,0 +1,36 @@
+schemaVersion: 2.0.0
+commandTests:
+  - name: "python-version"
+    command: "python"
+    args: ["--version"]
+    expectedOutput: ["Python {{ tag.versions.python }}"]
+  - name: "uv-installed"
+    command: "which"
+    args: ["uv"]
+    expectedOutput: ["/root/.local/bin/uv"]
+  - name: "poetry-installed"
+    command: "which"
+    args: ["poetry"]
+    expectedOutput: ["/root/.local/bin/poetry"]
+
+fileExistenceTests:
+  - name: "rootfs-python-info-exists"
+    path: "/etc/python-info"
+    shouldExist: true
+  - name: "rootfs-image-level-only-exists"
+    path: "/etc/image-level-only"
+    shouldExist: true
+  - name: "rootfs-version-level-only-exists"
+    path: "/etc/version-level-only"
+    shouldExist: true
+
+fileContentTests:
+  - name: "rootfs-python-info-has-version-level-content"
+    path: "/etc/python-info"
+    expectedContents: ["level=version"]
+  - name: "rootfs-image-level-only-content"
+    path: "/etc/image-level-only"
+    expectedContents: ["source=python-image"]
+  - name: "rootfs-version-level-only-content"
+    path: "/etc/version-level-only"
+    expectedContents: ["source=python-3"]

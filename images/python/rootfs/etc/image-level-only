@@ -1,0 +1,3 @@
+# This file only exists at the image level
+# It will NOT be overridden by version or variant
+source=python-image
