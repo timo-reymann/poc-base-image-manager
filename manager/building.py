@@ -38,6 +38,16 @@ GARAGE_REGION = "garage"
 GARAGE_ACCESS_KEY_ID = "GK" + "buildkit" + "0" * 24  # Placeholder, actual from garage
 GARAGE_SECRET_KEY = "buildkitsecret" + "0" * 18  # Placeholder, actual from garage
 
+# Platform support
+SUPPORTED_PLATFORMS = ["linux/amd64", "linux/arm64"]
+PLATFORM_ALIASES = {
+    "amd64": "linux/amd64",
+    "arm64": "linux/arm64",
+    "linux/amd64": "linux/amd64",
+    "linux/arm64": "linux/arm64",
+}
+BINFMT_IMAGE = "tonistiigi/binfmt"
+
 
 def get_docker_client() -> docker.DockerClient:
     """Get Docker client for the host daemon."""
