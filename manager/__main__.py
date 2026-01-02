@@ -598,7 +598,7 @@ def cmd_status(args: list[str]) -> int:
 
 def cmd_generate_ci(args: list[str]) -> int:
     """Generate CI configuration."""
-    from manager.ci_generator import generate_gitlab_ci
+    from manager.ci_generator import generate_gitlab_ci, generate_github_ci
 
     # Parse --provider argument (default: gitlab)
     provider = "gitlab"
@@ -611,9 +611,9 @@ def cmd_generate_ci(args: list[str]) -> int:
             print(f"Unknown argument: {args[i]}", file=sys.stderr)
             return 1
 
-    if provider != "gitlab":
+    if provider not in ("gitlab", "github"):
         print(f"Unsupported CI provider: {provider}", file=sys.stderr)
-        print("Supported providers: gitlab", file=sys.stderr)
+        print("Supported providers: gitlab, github", file=sys.stderr)
         return 1
 
     # Load and resolve all images
@@ -627,9 +627,13 @@ def cmd_generate_ci(args: list[str]) -> int:
     # Sort by dependencies
     sorted_images = sort_images(all_images)
 
-    # Generate CI
-    output_path = Path(".gitlab/ci/images.yml")
-    generate_gitlab_ci(sorted_images, output_path)
+    # Generate CI based on provider
+    if provider == "gitlab":
+        output_path = Path(".gitlab/ci/images.yml")
+        generate_gitlab_ci(sorted_images, output_path)
+    else:  # github
+        output_path = Path(".github/workflows/images.yml")
+        generate_github_ci(sorted_images, output_path)
 
     print(f"Generated CI configuration: {output_path}")
     return 0

@@ -107,3 +107,22 @@ def generate_gitlab_ci(images: list, output_path: Path) -> None:
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(template.render(**context))
+
+
+def generate_github_ci(images: list, output_path: Path) -> None:
+    """Generate GitHub Actions workflow file.
+
+    Args:
+        images: List of Image objects (should be in dependency order)
+        output_path: Path to write the generated workflow
+    """
+    env = Environment(
+        loader=FileSystemLoader(TEMPLATES_DIR / "github"),
+        keep_trailing_newline=True,
+    )
+    template = env.get_template("workflow.yml.j2")
+
+    context = build_ci_context(images)
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text(template.render(**context))

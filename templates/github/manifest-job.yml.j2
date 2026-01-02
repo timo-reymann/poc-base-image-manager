@@ -1,0 +1,11 @@
+  manifest-{{ image.name }}:
+    runs-on: ubuntu-latest
+    needs:
+{%- for platform in platforms %}
+      - build-{{ image.name }}-{{ platform }}
+{%- endfor %}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v4
+      - run: uv sync
+      - run: uv run image-manager manifest {{ image.name }} --snapshot-id "$SNAPSHOT_ID"
