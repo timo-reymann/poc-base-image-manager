@@ -3,7 +3,7 @@ import tempfile
 from pathlib import Path
 from unittest.mock import patch
 import pytest
-from manager.config import ImageConfig, TagConfig, VariantConfig, ConfigLoader, expand_env_vars, load_config, get_registry_url, clear_config_cache
+from manager.config import ImageConfig, TagConfig, VariantConfig, ConfigLoader, expand_env_vars, load_config, get_registry_url, get_registry_auth, clear_config_cache
 
 
 class TestExpandEnvVars:
@@ -223,3 +223,86 @@ class TestGetRegistryUrl:
         monkeypatch.delenv("MISSING_VAR", raising=False)
 
         assert get_registry_url() == "localhost:5050"
+
+
+class TestGetRegistryAuth:
+    def setup_method(self):
+        """Clear cache before each test."""
+        clear_config_cache()
+
+    def test_no_auth_when_no_config(self, tmp_path, monkeypatch):
+        """Returns None when no config file."""
+        monkeypatch.chdir(tmp_path)
+        assert get_registry_auth() is None
+
+    def test_no_auth_when_no_credentials(self, tmp_path, monkeypatch):
+        """Returns None when config has no username/password."""
+        config_file = tmp_path / ".image-manager.yml"
+        config_file.write_text("registry:\n  url: my-registry.com:5000\n")
+        monkeypatch.chdir(tmp_path)
+
+        assert get_registry_auth() is None
+
+    def test_auth_from_config(self, tmp_path, monkeypatch):
+        """Returns (username, password) tuple from config."""
+        config_file = tmp_path / ".image-manager.yml"
+        config_file.write_text(
+            "registry:\n"
+            "  url: my-registry.com:5000\n"
+            "  username: myuser\n"
+            "  password: mypass\n"
+        )
+        monkeypatch.chdir(tmp_path)
+
+        assert get_registry_auth() == ("myuser", "mypass")
+
+    def test_auth_from_env_vars(self, tmp_path, monkeypatch):
+        """Expands env vars in username and password."""
+        config_file = tmp_path / ".image-manager.yml"
+        config_file.write_text(
+            "registry:\n"
+            "  url: my-registry.com:5000\n"
+            "  username: ${REG_USER}\n"
+            "  password: ${REG_PASS}\n"
+        )
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setenv("REG_USER", "envuser")
+        monkeypatch.setenv("REG_PASS", "envpass")
+
+        assert get_registry_auth() == ("envuser", "envpass")
+
+    def test_no_auth_when_username_missing(self, tmp_path, monkeypatch):
+        """Returns None when only password is set."""
+        config_file = tmp_path / ".image-manager.yml"
+        config_file.write_text(
+            "registry:\n"
+            "  password: mypass\n"
+        )
+        monkeypatch.chdir(tmp_path)
+
+        assert get_registry_auth() is None
+
+    def test_no_auth_when_password_missing(self, tmp_path, monkeypatch):
+        """Returns None when only username is set."""
+        config_file = tmp_path / ".image-manager.yml"
+        config_file.write_text(
+            "registry:\n"
+            "  username: myuser\n"
+        )
+        monkeypatch.chdir(tmp_path)
+
+        assert get_registry_auth() is None
+
+    def test_no_auth_when_env_var_missing(self, tmp_path, monkeypatch):
+        """Returns None when env var for credentials is missing."""
+        config_file = tmp_path / ".image-manager.yml"
+        config_file.write_text(
+            "registry:\n"
+            "  username: ${MISSING_USER}\n"
+            "  password: ${MISSING_PASS}\n"
+        )
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.delenv("MISSING_USER", raising=False)
+        monkeypatch.delenv("MISSING_PASS", raising=False)
+
+        assert get_registry_auth() is None

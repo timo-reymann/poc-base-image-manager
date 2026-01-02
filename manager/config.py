@@ -85,6 +85,30 @@ def get_registry_url() -> str:
     return expanded
 
 
+def get_registry_auth() -> tuple[str, str] | None:
+    """Get registry authentication credentials.
+
+    Returns (username, password) tuple if both are configured,
+    None otherwise.
+    """
+    config = load_config()
+
+    registry = config.get("registry", {})
+    username = registry.get("username")
+    password = registry.get("password")
+
+    if username is None or password is None:
+        return None
+
+    expanded_username = expand_env_vars(username)
+    expanded_password = expand_env_vars(password)
+
+    if expanded_username is None or expanded_password is None:
+        return None
+
+    return (expanded_username, expanded_password)
+
+
 class TagConfig(BaseModel):
     """Configuration for a single tag"""
     name: str
