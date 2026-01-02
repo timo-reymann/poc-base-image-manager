@@ -1,10 +1,10 @@
-{# templates/gitlab/manifest-job.yml.j2 #}
 manifest-{{ image.name }}:
   stage: manifest
   needs:
-{% for platform in platforms %}
+{%- for platform in platforms %}
     - build-{{ image.name }}-{{ platform }}
-{% endfor %}
+{%- endfor %}
   script:
     - uv run image-manager manifest {{ image.name }} --snapshot-id "$SNAPSHOT_ID"
+
 
