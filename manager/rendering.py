@@ -2,6 +2,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Callable
 import os
+import re
 
 from pydantic import dataclasses
 from jinja2 import Environment
@@ -34,6 +35,34 @@ def get_platform_size(tag_path: Path, platform: str) -> str:
             return f"{size / 1024:.0f} KB"
         return f"{size} B"
     return "-"
+
+
+def inject_rootfs_copy(dockerfile: str, rootfs_user: str) -> str:
+    """Inject COPY rootfs/ instruction after first FROM.
+
+    Args:
+        dockerfile: The Dockerfile content
+        rootfs_user: User:group for COPY --chown
+
+    Returns:
+        Dockerfile with COPY injected, or unchanged if already present
+    """
+    # Skip if COPY rootfs/ already exists (case-insensitive for consistency)
+    if re.search(r'COPY\s+.*rootfs/', dockerfile, re.IGNORECASE):
+        return dockerfile
+
+    # Find first FROM line and inject after it
+    lines = dockerfile.split("\n")
+    result = []
+    injected = False
+
+    for line in lines:
+        result.append(line)
+        if not injected and re.match(r'^\s*FROM\s+', line, re.IGNORECASE):
+            result.append(f"COPY --chown={rootfs_user} rootfs/ /")
+            injected = True
+
+    return "\n".join(result)
 
 
 @dataclasses.dataclass(frozen=True)
