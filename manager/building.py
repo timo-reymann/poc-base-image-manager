@@ -719,6 +719,29 @@ def get_crane_path() -> Path:
     return binary
 
 
+def get_native_platform() -> str:
+    """Detect the native platform for the current system."""
+    machine = platform.machine().lower()
+    if machine in ("x86_64", "amd64"):
+        return "linux/amd64"
+    elif machine in ("arm64", "aarch64"):
+        return "linux/arm64"
+    else:
+        raise RuntimeError(f"Unsupported architecture: {machine}")
+
+
+def normalize_platform(plat: str) -> str:
+    """Normalize platform string to full form (e.g., 'amd64' -> 'linux/amd64')."""
+    if plat not in PLATFORM_ALIASES:
+        raise ValueError(f"Unknown platform: {plat}. Supported: {list(PLATFORM_ALIASES.keys())}")
+    return PLATFORM_ALIASES[plat]
+
+
+def platform_to_path(plat: str) -> str:
+    """Convert platform to filesystem-safe path component (e.g., 'linux/amd64' -> 'linux-amd64')."""
+    return plat.replace("/", "-")
+
+
 def push_to_registry(tar_path: Path, image_ref: str) -> bool:
     """Push a tar image to the local registry using crane.
 
