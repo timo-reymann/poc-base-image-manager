@@ -1,13 +1,14 @@
 {% for platform in platforms %}
 build-{{ image.name }}-{{ platform }}:
+  extends: .build
   stage: build-{{ image.name }}
+  variables:
+    IMAGE_NAME: {{ image.name }}
+    PLATFORM: {{ platform }}
 {%- if image.dependencies %}
   needs:
 {%- for dep in image.dependencies %}
     - manifest-{{ dep }}
 {%- endfor %}
 {%- endif %}
-  script:
-    - uv run image-manager build {{ image.name }} --platform {{ platform }} --snapshot-id "$SNAPSHOT_ID"
-    - uv run image-manager sbom {{ image.name }} --platform {{ platform }} --snapshot-id "$SNAPSHOT_ID"
 {% endfor %}

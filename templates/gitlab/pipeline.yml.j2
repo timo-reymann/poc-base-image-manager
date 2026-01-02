@@ -9,6 +9,22 @@ stages:
 
 variables:
   SNAPSHOT_ID: ${CI_MERGE_REQUEST_IID}
+
+# === BASE TEMPLATES ===
+
+.build:
+  script:
+    - uv run image-manager build ${IMAGE_NAME} --platform ${PLATFORM} --snapshot-id "$SNAPSHOT_ID"
+    - uv run image-manager sbom ${IMAGE_NAME} --platform ${PLATFORM} --snapshot-id "$SNAPSHOT_ID"
+
+.manifest:
+  script:
+    - uv run image-manager manifest ${IMAGE_NAME} --snapshot-id "$SNAPSHOT_ID"
+
+.test:
+  stage: test
+  script:
+    - uv run image-manager test ${IMAGE_NAME} --snapshot-id "$SNAPSHOT_ID"
 {% for image in images %}
 
 # === {{ image.name | upper }} ===

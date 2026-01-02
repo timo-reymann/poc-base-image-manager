@@ -1,6 +1,6 @@
 test-{{ image.name }}:
-  stage: test
+  extends: .test
+  variables:
+    IMAGE_NAME: {{ image.name }}
   needs:
     - manifest-{{ image.name }}
-  script:
-    - uv run image-manager test {{ image.name }} --snapshot-id "$SNAPSHOT_ID"
