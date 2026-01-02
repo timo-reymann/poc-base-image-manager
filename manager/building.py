@@ -835,7 +835,16 @@ def get_local_images() -> set[str]:
         for tag_dir in image_dir.iterdir():
             if not tag_dir.is_dir():
                 continue
-            if (tag_dir / "image.tar").exists():
+            # Check for multi-platform (platform subdirs)
+            has_platform = False
+            for plat_dir in tag_dir.iterdir():
+                if plat_dir.is_dir() and plat_dir.name.startswith("linux-"):
+                    if (plat_dir / "image.tar").exists():
+                        images.add(f"{image_dir.name}:{tag_dir.name}")
+                        has_platform = True
+                        break
+            # Fallback to single image.tar
+            if not has_platform and (tag_dir / "image.tar").exists():
                 images.add(f"{image_dir.name}:{tag_dir.name}")
 
     return images
