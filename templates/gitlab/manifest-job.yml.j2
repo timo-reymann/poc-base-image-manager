@@ -1,10 +1,9 @@
 manifest-{{ image.name }}:
-  stage: manifest
+  stage: manifest-{{ image.depth }}
   needs:
 {%- for platform in platforms %}
     - build-{{ image.name }}-{{ platform }}
 {%- endfor %}
   script:
     - uv run image-manager manifest {{ image.name }} --snapshot-id "$SNAPSHOT_ID"
-
 

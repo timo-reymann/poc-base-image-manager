@@ -10,6 +10,38 @@ from manager.dependency_graph import extract_dependencies
 TEMPLATES_DIR = Path(__file__).parent.parent / "templates"
 
 
+def _calculate_depths(image_names: set[str], dependencies: dict[str, set[str]]) -> dict[str, int]:
+    """Calculate dependency depth for each image.
+
+    Depth 0 = no dependencies, depth 1 = depends only on depth-0 images, etc.
+    """
+    depths = {}
+    remaining = set(image_names)
+
+    current_depth = 0
+    while remaining:
+        # Find images whose dependencies are all already assigned depths
+        ready = set()
+        for name in remaining:
+            deps = dependencies.get(name, set()) & image_names
+            if all(d in depths for d in deps):
+                ready.add(name)
+
+        if not ready:
+            # Circular dependency or bug - assign remaining to current depth
+            for name in remaining:
+                depths[name] = current_depth
+            break
+
+        for name in ready:
+            depths[name] = current_depth
+            remaining.remove(name)
+
+        current_depth += 1
+
+    return depths
+
+
 def build_ci_context(images: list) -> dict:
     """Build context dictionary for CI templates.
 
@@ -20,12 +52,15 @@ def build_ci_context(images: list) -> dict:
         Dictionary with images, platforms, and metadata for templates
     """
     dependencies = extract_dependencies(images)
+    image_names = {img.name for img in images}
+    depths = _calculate_depths(image_names, dependencies)
+    max_depth = max(depths.values()) if depths else 0
 
     image_contexts = []
     for image in images:
         # Get direct dependencies (other images this one depends on)
         deps = [d for d in dependencies.get(image.name, set())
-                if d in {img.name for img in images}]
+                if d in image_names]
 
         # Collect all tag names including variant tags
         tag_names = [tag.name for tag in image.tags]
@@ -34,11 +69,20 @@ def build_ci_context(images: list) -> dict:
             "name": image.name,
             "dependencies": sorted(deps),
             "tags": tag_names,
+            "depth": depths[image.name],
         })
+
+    # Generate stage names based on max depth
+    stages = []
+    for d in range(max_depth + 1):
+        stages.append(f"build-{d}")
+        stages.append(f"manifest-{d}")
+    stages.append("test")
 
     return {
         "images": image_contexts,
         "platforms": ["amd64", "arm64"],
+        "stages": stages,
         "generated_at": datetime.now(timezone.utc).isoformat(),
     }
 
