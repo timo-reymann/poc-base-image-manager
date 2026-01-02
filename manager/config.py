@@ -11,6 +11,13 @@ from pydantic_yaml import parse_yaml_file_as
 _config_cache: dict | None = None
 
 CONFIG_FILE = ".image-manager.yml"
+DEFAULT_REGISTRY = "localhost:5050"
+
+
+def clear_config_cache() -> None:
+    """Clear the config cache. Useful for testing."""
+    global _config_cache
+    _config_cache = None
 
 
 def expand_env_vars(value: str | None) -> str | None:
@@ -58,6 +65,24 @@ def load_config() -> dict:
         _config_cache = {}
 
     return _config_cache
+
+
+def get_registry_url() -> str:
+    """Get registry URL from config or default to localhost:5050."""
+    config = load_config()
+
+    registry = config.get("registry", {})
+    url = registry.get("url")
+
+    if url is None:
+        return DEFAULT_REGISTRY
+
+    expanded = expand_env_vars(url)
+
+    if expanded is None:
+        return DEFAULT_REGISTRY
+
+    return expanded
 
 
 class TagConfig(BaseModel):

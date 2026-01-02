@@ -3,7 +3,7 @@ import tempfile
 from pathlib import Path
 from unittest.mock import patch
 import pytest
-from manager.config import ImageConfig, TagConfig, VariantConfig, ConfigLoader, expand_env_vars, load_config
+from manager.config import ImageConfig, TagConfig, VariantConfig, ConfigLoader, expand_env_vars, load_config, get_registry_url, clear_config_cache
 
 
 class TestExpandEnvVars:
@@ -186,3 +186,40 @@ class TestLoadConfig:
 
         assert first["registry"]["url"] == "first.com"
         assert second["registry"]["url"] == "first.com"  # Still cached
+
+
+class TestGetRegistryUrl:
+    def setup_method(self):
+        """Clear cache before each test."""
+        clear_config_cache()
+
+    def test_default_when_no_config(self, tmp_path, monkeypatch):
+        """Returns localhost:5050 when no config file."""
+        monkeypatch.chdir(tmp_path)
+        assert get_registry_url() == "localhost:5050"
+
+    def test_url_from_config(self, tmp_path, monkeypatch):
+        """Returns URL from config file."""
+        config_file = tmp_path / ".image-manager.yml"
+        config_file.write_text("registry:\n  url: my-registry.com:5000\n")
+        monkeypatch.chdir(tmp_path)
+
+        assert get_registry_url() == "my-registry.com:5000"
+
+    def test_url_from_env_var(self, tmp_path, monkeypatch):
+        """Expands env var in URL."""
+        config_file = tmp_path / ".image-manager.yml"
+        config_file.write_text("registry:\n  url: ${REGISTRY_URL}\n")
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setenv("REGISTRY_URL", "env-registry.com:5000")
+
+        assert get_registry_url() == "env-registry.com:5000"
+
+    def test_missing_env_var_falls_back_to_default(self, tmp_path, monkeypatch):
+        """Missing env var for URL falls back to localhost:5050."""
+        config_file = tmp_path / ".image-manager.yml"
+        config_file.write_text("registry:\n  url: ${MISSING_VAR}\n")
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.delenv("MISSING_VAR", raising=False)
+
+        assert get_registry_url() == "localhost:5050"
