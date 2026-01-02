@@ -105,10 +105,16 @@ class ModelResolver:
             merged_versions = Merger.merge(config.versions, tag_config.versions)
             merged_variables = Merger.merge(config.variables, tag_config.variables)
 
+            # Inherit rootfs settings: image -> tag (later wins)
+            tag_rootfs_user = tag_config.rootfs_user if tag_config.rootfs_user is not None else (config.rootfs_user or "0:0")
+            tag_rootfs_copy = tag_config.rootfs_copy if tag_config.rootfs_copy is not None else (config.rootfs_copy if config.rootfs_copy is not None else True)
+
             base_tags.append(Tag(
                 name=tag_config.name,
                 versions=merged_versions,
-                variables=merged_variables
+                variables=merged_variables,
+                rootfs_user=tag_rootfs_user,
+                rootfs_copy=tag_rootfs_copy
             ))
 
         # Generate automatic semver aliases from base tags
@@ -144,11 +150,17 @@ class ModelResolver:
                 variant_target = f"{base_target}{suffix}"
                 variant_aliases[variant_alias] = variant_target
 
+            # Inherit rootfs settings for variant: image -> variant (later wins)
+            variant_rootfs_user = variant_config.rootfs_user if variant_config.rootfs_user is not None else (config.rootfs_user or "0:0")
+            variant_rootfs_copy = variant_config.rootfs_copy if variant_config.rootfs_copy is not None else (config.rootfs_copy if config.rootfs_copy is not None else True)
+
             variants.append(Variant(
                 name=variant_config.name,
                 template_path=variant_template_path,
                 tags=variant_tags,
-                aliases=variant_aliases  # Add variant-specific aliases
+                aliases=variant_aliases,  # Add variant-specific aliases
+                rootfs_user=variant_rootfs_user,
+                rootfs_copy=variant_rootfs_copy
             ))
 
         # Smart name detection
@@ -164,6 +176,10 @@ class ModelResolver:
             # images/dotnet/9.0/ → "dotnet"
             image_name = path.parent.name
 
+        # Image-level rootfs settings (with defaults)
+        image_rootfs_user = config.rootfs_user or "0:0"
+        image_rootfs_copy = config.rootfs_copy if config.rootfs_copy is not None else True
+
         return Image(
             name=image_name,
             path=path,
@@ -174,5 +190,7 @@ class ModelResolver:
             variants=variants,
             is_base_image=config.is_base_image,
             extends=config.extends,
-            aliases=aliases  # Use generated aliases instead of config.aliases
+            aliases=aliases,  # Use generated aliases instead of config.aliases
+            rootfs_user=image_rootfs_user,
+            rootfs_copy=image_rootfs_copy
         )

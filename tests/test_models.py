@@ -125,3 +125,80 @@ def test_image_has_rootfs_fields():
     )
     assert image.rootfs_user == "1000:1000"
     assert image.rootfs_copy is False
+
+
+def test_resolver_inherits_rootfs_from_image(tmp_path):
+    """Test ModelResolver inherits rootfs settings from image to tags"""
+    from manager.config import ConfigLoader
+    from manager.models import ModelResolver
+
+    config_file = tmp_path / "image.yml"
+    config_file.write_text("""
+name: test
+rootfs_user: "1000:1000"
+rootfs_copy: false
+tags:
+  - name: "1.0"
+""")
+    (tmp_path / "Dockerfile.tpl").write_text("FROM base")
+
+    config = ConfigLoader.load(config_file)
+    resolver = ModelResolver()
+    image = resolver.resolve(config, tmp_path)
+
+    assert image.rootfs_user == "1000:1000"
+    assert image.rootfs_copy is False
+    assert image.tags[0].rootfs_user == "1000:1000"
+    assert image.tags[0].rootfs_copy is False
+
+
+def test_resolver_tag_overrides_image_rootfs(tmp_path):
+    """Test tag-level rootfs settings override image-level"""
+    from manager.config import ConfigLoader
+    from manager.models import ModelResolver
+
+    config_file = tmp_path / "image.yml"
+    config_file.write_text("""
+name: test
+rootfs_user: "1000:1000"
+rootfs_copy: true
+tags:
+  - name: "1.0"
+    rootfs_user: "0:0"
+    rootfs_copy: false
+""")
+    (tmp_path / "Dockerfile.tpl").write_text("FROM base")
+
+    config = ConfigLoader.load(config_file)
+    resolver = ModelResolver()
+    image = resolver.resolve(config, tmp_path)
+
+    assert image.tags[0].rootfs_user == "0:0"
+    assert image.tags[0].rootfs_copy is False
+
+
+def test_resolver_variant_inherits_rootfs(tmp_path):
+    """Test variant inherits rootfs from image, tag overrides cascade"""
+    from manager.config import ConfigLoader
+    from manager.models import ModelResolver
+
+    config_file = tmp_path / "image.yml"
+    config_file.write_text("""
+name: test
+rootfs_user: "1000:1000"
+tags:
+  - name: "1.0"
+variants:
+  - name: slim
+    tag_suffix: "-slim"
+    rootfs_user: "0:0"
+""")
+    (tmp_path / "Dockerfile.tpl").write_text("FROM base")
+    (tmp_path / "Dockerfile.slim.tpl").write_text("FROM base")
+
+    config = ConfigLoader.load(config_file)
+    resolver = ModelResolver()
+    image = resolver.resolve(config, tmp_path)
+
+    assert image.variants[0].rootfs_user == "0:0"
+    assert image.variants[0].rootfs_copy is True  # Default, not overridden
