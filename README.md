@@ -24,6 +24,7 @@ The following tools are bundled in `bin/` for linux-amd64 and darwin-arm64:
 | [container-structure-test](https://github.com/GoogleContainerTools/container-structure-test) | v1.22.1 | Image testing |
 | [syft](https://github.com/anchore/syft) | v1.39.0 | SBOM generation |
 | [buildkit](https://github.com/moby/buildkit) | v0.26.3 | Rootless builds |
+| [rootlesskit](https://github.com/rootless-containers/rootlesskit) | v2.3.6 | Rootless wrapper (Linux) |
 
 ## Usage
 
@@ -145,7 +146,7 @@ uv run image-manager stop              # Stop all
 ```
 
 **buildkitd** (for building):
-- **Linux**: Runs natively using the bundled binary
+- **Linux**: Runs rootless natively using bundled `rootlesskit` + `buildkitd`
 - **macOS**: Runs rootless in a Docker container (`moby/buildkit:rootless`)
 
 **dind** (for testing):

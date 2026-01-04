@@ -107,6 +107,14 @@ def get_buildkitd_path() -> Path:
     return binary
 
 
+def get_rootlesskit_path() -> Path:
+    """Get the path to the rootlesskit binary (Linux only)."""
+    binary = get_bin_path() / "rootlesskit"
+    if not binary.exists():
+        raise RuntimeError(f"rootlesskit binary not found: {binary}")
+    return binary
+
+
 def get_pid_file() -> Path:
     """Get the path to the buildkitd PID file."""
     return DEFAULT_BUILDKIT_DIR / "buildkitd.pid"
@@ -224,22 +232,41 @@ def start_buildkitd_container() -> int:
 
 
 def start_buildkitd_native() -> int:
-    """Start buildkitd natively (Linux only)."""
+    """Start buildkitd natively with rootlesskit (Linux only)."""
     if is_buildkitd_running():
         print(f"buildkitd is already running (socket: {DEFAULT_SOCKET_PATH})")
         return 0
 
     DEFAULT_BUILDKIT_DIR.mkdir(parents=True, exist_ok=True)
 
+    # Create buildkitd config to allow insecure local registry
+    registry_host = f"localhost:{REGISTRY_PORT}"
+    buildkitd_config = f"""
+[registry."{registry_host}"]
+  http = true
+  insecure = true
+"""
+    config_dir = DEFAULT_BUILDKIT_DIR / "config"
+    config_dir.mkdir(parents=True, exist_ok=True)
+    config_file = config_dir / "buildkitd.toml"
+    config_file.write_text(buildkitd_config)
+
+    rootlesskit = get_rootlesskit_path()
     buildkitd = get_buildkitd_path()
 
     cmd = [
+        str(rootlesskit),
+        "--net=host",
+        "--copy-up=/etc",
+        "--copy-up=/run",
         str(buildkitd),
         "--addr", get_socket_addr(),
         "--root", str(DEFAULT_BUILDKIT_DIR / "root"),
+        "--oci-worker-no-process-sandbox",
+        "--config", str(config_file),
     ]
 
-    print(f"Starting buildkitd: {' '.join(cmd)}")
+    print(f"Starting buildkitd (rootless): {' '.join(cmd)}")
 
     proc = subprocess.Popen(
         cmd,
@@ -252,7 +279,7 @@ def start_buildkitd_native() -> int:
 
     for _ in range(30):
         if DEFAULT_SOCKET_PATH.exists():
-            print(f"buildkitd started (pid: {proc.pid}, socket: {DEFAULT_SOCKET_PATH})")
+            print(f"buildkitd started rootless (pid: {proc.pid}, socket: {DEFAULT_SOCKET_PATH})")
             return 0
         time.sleep(0.1)
 
