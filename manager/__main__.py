@@ -9,6 +9,7 @@ from manager.models import ModelResolver
 from manager.rendering import RenderContext, render_dockerfile, render_test_config, generate_image_report
 from manager.dependency_graph import sort_images, extract_dependencies, CyclicDependencyError
 from manager.rootfs import collect_rootfs_paths, merge_rootfs, has_rootfs_content, warn_sensitive_files
+from manager.locking import read_lock_file, read_base_digest, rewrite_apt_install, rewrite_from_digest
 
 
 def print_usage() -> None:
@@ -17,6 +18,7 @@ def print_usage() -> None:
     print()
     print("Commands:")
     print("  generate            Generate Dockerfiles and test configs from images/")
+    print("  lock [image:tag]    Generate packages.lock with pinned versions")
     print("  build [image:tag]   Build an image (or all images if none specified)")
     print("  manifest <image:tag> Create multi-platform manifest from registry images")
     print("  sbom [image:tag]    Generate SBOM for an image (or all images)")
@@ -31,6 +33,9 @@ def print_usage() -> None:
     print("                      - generate: FROM refs include snapshot suffix")
     print("                      - build: push to registry with snapshot tag only")
     print("                      - sbom/test: log snapshot context")
+    print()
+    print("Generate options:")
+    print("  --no-lock           Skip applying packages.lock (no version/digest pinning)")
     print()
     print("Build options:")
     print("  --no-cache          Disable S3 build cache")
@@ -89,6 +94,7 @@ def get_all_image_refs() -> list[str]:
 def cmd_generate(args: list[str]) -> int:
     """Generate Dockerfiles and test configs."""
     snapshot_id = None
+    use_lock = True
 
     # Parse options
     i = 0
@@ -96,6 +102,9 @@ def cmd_generate(args: list[str]) -> int:
         if args[i] == "--snapshot-id" and i + 1 < len(args):
             snapshot_id = args[i + 1]
             i += 2
+        elif args[i] == "--no-lock":
+            use_lock = False
+            i += 1
         elif args[i].startswith("--"):
             print(f"Unknown argument: {args[i]}", file=sys.stderr)
             return 1
@@ -138,6 +147,12 @@ def cmd_generate(args: list[str]) -> int:
     for image in sorted_images:
         image_out_path = dist_path.joinpath(image.name)
 
+        # Check lock file once per image
+        lock_path = image.path / "packages.lock"
+        has_lock = lock_path.exists()
+        if use_lock and not has_lock:
+            print(f"Warning: No packages.lock for {image.name}, build may not be reproducible", file=sys.stderr)
+
         # Render base tags
         for tag in image.tags:
             tag_out_path = image_out_path.joinpath(tag.name)
@@ -168,6 +183,18 @@ def cmd_generate(args: list[str]) -> int:
             )
 
             rendered_dockerfile = render_dockerfile(ctx)
+
+            # Apply lock file if enabled and exists
+            if use_lock and has_lock:
+                locked_packages = read_lock_file(lock_path)
+                if locked_packages:
+                    rendered_dockerfile = rewrite_apt_install(rendered_dockerfile, locked_packages)
+
+                base_digest_info = read_base_digest(lock_path)
+                if base_digest_info:
+                    original_ref, digest = base_digest_info
+                    rendered_dockerfile = rewrite_from_digest(rendered_dockerfile, original_ref, digest)
+
             tag_out_path.joinpath("Dockerfile").write_text(rendered_dockerfile)
 
             rendered_test_config = render_test_config(ctx)
@@ -203,6 +230,19 @@ def cmd_generate(args: list[str]) -> int:
                 )
 
                 rendered_dockerfile = render_dockerfile(ctx)
+
+                # Apply lock file if enabled and exists
+                # Variants use the same lock file as the base image
+                if use_lock and has_lock:
+                    locked_packages = read_lock_file(lock_path)
+                    if locked_packages:
+                        rendered_dockerfile = rewrite_apt_install(rendered_dockerfile, locked_packages)
+
+                    base_digest_info = read_base_digest(lock_path)
+                    if base_digest_info:
+                        original_ref, digest = base_digest_info
+                        rendered_dockerfile = rewrite_from_digest(rendered_dockerfile, original_ref, digest)
+
                 variant_out_path.joinpath("Dockerfile").write_text(rendered_dockerfile)
 
                 rendered_test_config = render_test_config(ctx)
@@ -555,6 +595,41 @@ def cmd_status(args: list[str]) -> int:
     return 0 if all_running else 1
 
 
+def cmd_lock(args: list[str]) -> int:
+    """Generate packages.lock for an image."""
+    from manager.locking import run_lock
+
+    if not args:
+        # Lock all images
+        image_refs = []
+        dist_path = Path("dist")
+        if not dist_path.exists():
+            print("Error: No generated files found. Run 'image-manager generate' first.", file=sys.stderr)
+            return 1
+        for dockerfile in dist_path.glob("*/*/Dockerfile"):
+            name = dockerfile.parent.parent.name
+            tag = dockerfile.parent.name
+            # Skip alias files (they contain just the target tag name)
+            if dockerfile.stat().st_size > 100:  # Dockerfiles are larger than alias files
+                image_refs.append(f"{name}:{tag}")
+    else:
+        image_refs = args
+
+    images_dir = Path("images")
+    dist_dir = Path("dist")
+
+    exit_code = 0
+    for image_ref in image_refs:
+        print(f"\n{'='*60}")
+        print(f"Locking {image_ref}")
+        print('='*60)
+        result = run_lock(image_ref, images_dir, dist_dir)
+        if result != 0:
+            exit_code = result
+
+    return exit_code
+
+
 def cmd_generate_ci(args: list[str]) -> int:
     """Generate CI configuration."""
     from manager.ci_generator import generate_gitlab_ci, generate_github_ci
@@ -611,6 +686,8 @@ def main():
         sys.exit(0)
     elif command == "generate":
         sys.exit(cmd_generate(args))
+    elif command == "lock":
+        sys.exit(cmd_lock(args))
     elif command == "build":
         sys.exit(cmd_build(args))
     elif command == "manifest":
