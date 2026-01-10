@@ -348,6 +348,15 @@ def get_registry_addr() -> str:
     return get_registry_url()
 
 
+def is_registry_insecure() -> bool:
+    """Check if the push registry should use insecure (HTTP) connections.
+
+    Returns True if the registry is configured as insecure or auto-detected
+    as a local registry (localhost, 127.0.0.1, private IPs).
+    """
+    return get_push_registry().insecure
+
+
 def get_registry_addr_for_buildkit() -> str:
     """Get the registry host as seen from buildkit container."""
     registry_url = get_registry_url()
@@ -599,8 +608,9 @@ def push_to_registry(tar_path: Path, image_ref: str) -> bool:
         "push",
         str(tar_path),
         registry_ref,
-        "--insecure",  # Allow HTTP for localhost
     ]
+    if is_registry_insecure():
+        cmd.append("--insecure")
 
     print(f"Pushing to registry: {registry_ref}")
     result = subprocess.run(cmd, capture_output=True, text=True)
@@ -673,7 +683,9 @@ def tag_aliases(image_ref: str, snapshot_id: str | None = None) -> int:
         source_ref = f"{registry}/{name}:{tag}"
 
     # Check if source image exists
-    check_cmd = [str(crane), "digest", "--insecure", source_ref]
+    check_cmd = [str(crane), "digest", source_ref]
+    if is_registry_insecure():
+        check_cmd.insert(2, "--insecure")
     result = subprocess.run(check_cmd, capture_output=True, text=True)
     if result.returncode != 0:
         print(f"Error: Image not found in registry: {source_ref}", file=sys.stderr)
@@ -697,7 +709,9 @@ def tag_aliases(image_ref: str, snapshot_id: str | None = None) -> int:
             alias_tag = alias
 
         # crane tag IMG TAG - tags IMG with TAG
-        tag_cmd = [str(crane), "tag", "--insecure", source_ref, alias_tag]
+        tag_cmd = [str(crane), "tag", source_ref, alias_tag]
+        if is_registry_insecure():
+            tag_cmd.insert(2, "--insecure")
         tag_result = subprocess.run(tag_cmd, capture_output=True, text=True)
 
         if tag_result.returncode != 0:
@@ -735,7 +749,9 @@ def check_image_exists(image_ref: str, snapshot_id: str | None = None) -> bool:
     else:
         full_ref = f"{registry}/{name}:{tag}"
 
-    check_cmd = [str(crane), "digest", "--insecure", full_ref]
+    check_cmd = [str(crane), "digest", full_ref]
+    if is_registry_insecure():
+        check_cmd.insert(2, "--insecure")
     result = subprocess.run(check_cmd, capture_output=True, text=True)
     return result.returncode == 0
 
@@ -1180,9 +1196,10 @@ def create_multiplatform_manifest(
     # Use crane to create index
     cmd = [
         str(crane), "index", "append",
-        "--insecure",
         "-t", manifest_ref,
     ]
+    if is_registry_insecure():
+        cmd.insert(3, "--insecure")
     for ref in platform_refs:
         cmd.extend(["-m", ref])
 
@@ -1196,9 +1213,11 @@ def create_multiplatform_manifest(
 
     # Export manifest to tar
     export_cmd = [
-        str(crane), "pull", "--insecure",
+        str(crane), "pull",
         manifest_ref, str(manifest_tar),
     ]
+    if is_registry_insecure():
+        export_cmd.insert(2, "--insecure")
 
     export_result = subprocess.run(export_cmd, capture_output=True, text=True)
     if export_result.returncode == 0:
@@ -1249,7 +1268,9 @@ def create_manifest_from_registry(
             ref = f"{registry}/{image_ref}-{platform_path}"
 
         # Check if image exists using crane digest
-        check_cmd = [str(crane), "digest", "--insecure", ref]
+        check_cmd = [str(crane), "digest", ref]
+        if is_registry_insecure():
+            check_cmd.insert(2, "--insecure")
         result = subprocess.run(check_cmd, capture_output=True, text=True)
 
         if result.returncode == 0:

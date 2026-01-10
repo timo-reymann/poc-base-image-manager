@@ -17,11 +17,30 @@ DEFAULT_REGISTRY = "localhost:5050"
 class RegistryConfig:
     """Configuration for a single registry."""
 
-    def __init__(self, url: str, username: str | None = None, password: str | None = None, default: bool = False):
+    def __init__(
+        self,
+        url: str,
+        username: str | None = None,
+        password: str | None = None,
+        default: bool = False,
+        insecure: bool | None = None,
+    ):
         self.url = url
         self.username = username
         self.password = password
         self.default = default
+        # If insecure is not explicitly set, auto-detect based on URL
+        if insecure is None:
+            self.insecure = self._is_local_registry(url)
+        else:
+            self.insecure = insecure
+
+    @staticmethod
+    def _is_local_registry(url: str) -> bool:
+        """Check if URL points to a local/development registry (HTTP assumed)."""
+        # Strip protocol if present
+        host = url.split("://")[-1].split("/")[0].split(":")[0]
+        return host in ("localhost", "127.0.0.1", "0.0.0.0") or host.startswith("192.168.") or host.startswith("10.")
 
     def get_auth(self) -> tuple[str, str] | None:
         """Get (username, password) tuple if both are set, None otherwise."""
@@ -193,7 +212,8 @@ def get_registries() -> list[RegistryConfig]:
             username = expand_env_vars(reg.get("username"))
             password = expand_env_vars(reg.get("password"))
             default = reg.get("default", False)
-            result.append(RegistryConfig(url, username, password, default))
+            insecure = reg.get("insecure")  # None means auto-detect
+            result.append(RegistryConfig(url, username, password, default, insecure))
         return result
 
     # Fall back to legacy single registry format
@@ -204,9 +224,10 @@ def get_registries() -> list[RegistryConfig]:
 
     username = expand_env_vars(registry.get("username"))
     password = expand_env_vars(registry.get("password"))
+    insecure = registry.get("insecure")  # None means auto-detect
 
     # Legacy format: single registry is always the default
-    return [RegistryConfig(url, username, password, default=True)]
+    return [RegistryConfig(url, username, password, default=True, insecure=insecure)]
 
 
 def get_push_registry() -> RegistryConfig:
