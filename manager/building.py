@@ -13,7 +13,7 @@ import time
 from pathlib import Path
 
 import docker
-from manager.config import get_registry_url, get_registry_auth
+from manager.config import get_registry_url, get_registry_auth, get_registries, get_push_registry
 from manager.rendering import generate_tag_report
 from docker.errors import NotFound, APIError
 
@@ -398,6 +398,57 @@ def docker_login(registry: str, username: str, password: str) -> bool:
     except Exception as e:
         print(f"Warning: Docker login failed: {e}", file=sys.stderr)
         return False
+
+
+def crane_login(registry: str, username: str, password: str) -> bool:
+    """Log in to a container registry using crane.
+
+    This enables crane to push/pull from private registries.
+    See: https://github.com/google/go-containerregistry/blob/main/cmd/crane/doc/crane_auth_login.md
+
+    Returns True on success, False on failure.
+    """
+    crane = get_crane_path()
+
+    cmd = [
+        str(crane),
+        "auth", "login",
+        registry,
+        "--username", username,
+        "--password", password,
+    ]
+
+    result = subprocess.run(cmd, capture_output=True, text=True)
+
+    if result.returncode != 0:
+        print(f"Warning: Crane login failed for {registry}: {result.stderr}", file=sys.stderr)
+        return False
+
+    return True
+
+
+def login_to_all_registries() -> None:
+    """Log in to all configured registries that have credentials.
+
+    Logs in with both Docker and crane to enable:
+    - Docker: Pulling base images during builds
+    - Crane: Pushing images to registry
+    """
+    registries = get_registries()
+
+    for reg in registries:
+        auth = reg.get_auth()
+        if auth:
+            username, password = auth
+            # Extract registry host (without path) for login
+            registry_host = reg.url.split("/")[0]
+
+            # Login with Docker (for pulling during builds)
+            docker_login(registry_host, username, password)
+
+            # Login with crane (for pushing)
+            if crane_login(registry_host, username, password):
+                print(f"Logged in to registry: {registry_host}")
 
 
 # --- Garage (S3 cache) ---
@@ -914,20 +965,15 @@ def run_build(
     Returns:
         Exit code from buildctl
     """
-    # Check registry connection
+    # Check registry connection (to the push registry)
+    push_registry = get_push_registry()
     if not check_registry_connection():
-        print(f"Error: Registry not reachable at {get_registry_url()}", file=sys.stderr)
+        print(f"Error: Registry not reachable at {push_registry.url}", file=sys.stderr)
         print("Run 'docker compose up -d' to start infrastructure services.", file=sys.stderr)
         return 1
 
-    # Before pushing to registry, log in if credentials are configured
-    auth = get_registry_auth()
-    if auth:
-        username, password = auth
-        registry_url = get_registry_url()
-        # Extract registry host (without path) for docker login
-        registry_host = registry_url.split("/")[0]
-        docker_login(registry_host, username, password)
+    # Log in to all configured registries (for pulling and pushing)
+    login_to_all_registries()
 
     if use_cache and not check_garage_connection():
         print("Warning: Garage not reachable, building without cache", file=sys.stderr)

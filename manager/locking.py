@@ -12,6 +12,8 @@ from pathlib import Path
 
 import yaml
 
+from manager.config import get_registries
+
 # Lock file format version - increment when format changes
 LOCK_VERSION = 1
 
@@ -39,6 +41,46 @@ def get_crane_path() -> Path:
 def get_syft_path() -> Path:
     """Get the path to the syft binary."""
     return Path(__file__).parent.parent / "bin" / _get_bin_platform() / "syft"
+
+
+def crane_login(registry: str, username: str, password: str) -> bool:
+    """Log in to a container registry using crane.
+
+    Args:
+        registry: Registry host (e.g., 'ghcr.io')
+        username: Username
+        password: Password or token
+
+    Returns:
+        True on success, False on failure
+    """
+    crane = get_crane_path()
+    if not crane.exists():
+        return False
+
+    result = subprocess.run(
+        [str(crane), "auth", "login", registry, "--username", username, "--password", password],
+        capture_output=True,
+        text=True,
+    )
+
+    return result.returncode == 0
+
+
+def login_to_registries() -> None:
+    """Log in to all configured registries using crane.
+
+    This enables crane to pull digests from private registries.
+    """
+    registries = get_registries()
+
+    for reg in registries:
+        auth = reg.get_auth()
+        if auth:
+            username, password = auth
+            registry_host = reg.url.split("/")[0]
+            if crane_login(registry_host, username, password):
+                print(f"Authenticated to: {registry_host}")
 
 
 def extract_distro_from_image(image_tar: Path) -> dict | None:
@@ -472,6 +514,9 @@ def run_lock(
     """
     if not image_refs:
         return 0
+
+    # Authenticate to registries for pulling digests
+    login_to_registries()
 
     # All refs should be for the same image
     name = image_refs[0].split(":")[0]

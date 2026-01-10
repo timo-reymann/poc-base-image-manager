@@ -14,6 +14,22 @@ CONFIG_FILE = ".image-manager.yml"
 DEFAULT_REGISTRY = "localhost:5050"
 
 
+class RegistryConfig:
+    """Configuration for a single registry."""
+
+    def __init__(self, url: str, username: str | None = None, password: str | None = None, default: bool = False):
+        self.url = url
+        self.username = username
+        self.password = password
+        self.default = default
+
+    def get_auth(self) -> tuple[str, str] | None:
+        """Get (username, password) tuple if both are set, None otherwise."""
+        if self.username is None or self.password is None:
+            return None
+        return (self.username, self.password)
+
+
 def clear_config_cache() -> None:
     """Clear the config cache. Useful for testing."""
     global _config_cache
@@ -23,7 +39,12 @@ def clear_config_cache() -> None:
 def expand_env_vars(value: str | None) -> str | None:
     """Expand ${VAR} references in a string value.
 
-    Returns None if the value is None or contains an undefined env var.
+    Supports:
+    - Pure env var: ${VAR}
+    - Multiple env vars: ${USER}:${PASS}
+    - Mixed content: https://${HOST}:5000
+
+    Returns None if the value is None or any referenced env var is undefined.
     """
     if value is None:
         return None
@@ -31,14 +52,25 @@ def expand_env_vars(value: str | None) -> str | None:
     if not value:
         return value
 
-    # Check if it's a pure env var reference like ${VAR}
-    match = re.fullmatch(r'\$\{([^}]+)\}', value)
-    if match:
-        var_name = match.group(1)
-        return os.environ.get(var_name)
+    # Find all ${VAR} patterns
+    pattern = r'\$\{([^}]+)\}'
+    matches = list(re.finditer(pattern, value))
 
-    # No env var pattern found, return as-is
-    return value
+    if not matches:
+        # No env var pattern found, return as-is
+        return value
+
+    # Expand all env vars
+    result = value
+    for match in reversed(matches):  # Reverse to preserve positions during replacement
+        var_name = match.group(1)
+        env_value = os.environ.get(var_name)
+        if env_value is None:
+            # Undefined env var - return None
+            return None
+        result = result[:match.start()] + env_value + result[match.end():]
+
+    return result
 
 
 def load_config() -> dict:
@@ -68,9 +100,30 @@ def load_config() -> dict:
 
 
 def get_registry_url() -> str:
-    """Get registry URL from config or default to localhost:5050."""
+    """Get the URL of the default push registry.
+
+    With multi-registry config, returns the one marked as default.
+    Falls back to legacy single registry format or localhost:5050.
+    """
     config = load_config()
 
+    # Check new multi-registry format first
+    registries = config.get("registries", [])
+    if registries:
+        # Find the default registry
+        for reg in registries:
+            if reg.get("default", False):
+                url = expand_env_vars(reg.get("url"))
+                if url:
+                    return url
+        # No default set, use first registry
+        if registries:
+            url = expand_env_vars(registries[0].get("url"))
+            if url:
+                return url
+        return DEFAULT_REGISTRY
+
+    # Fall back to legacy single registry format
     registry = config.get("registry", {})
     url = registry.get("url")
 
@@ -86,13 +139,25 @@ def get_registry_url() -> str:
 
 
 def get_registry_auth() -> tuple[str, str] | None:
-    """Get registry authentication credentials.
+    """Get registry authentication credentials for the default push registry.
 
     Returns (username, password) tuple if both are configured,
     None otherwise.
     """
     config = load_config()
 
+    # Check new multi-registry format first
+    registries = config.get("registries", [])
+    if registries:
+        for reg in registries:
+            if reg.get("default", False):
+                username = expand_env_vars(reg.get("username"))
+                password = expand_env_vars(reg.get("password"))
+                if username and password:
+                    return (username, password)
+        return None
+
+    # Fall back to legacy single registry format
     registry = config.get("registry", {})
     username = registry.get("username")
     password = registry.get("password")
@@ -107,6 +172,82 @@ def get_registry_auth() -> tuple[str, str] | None:
         return None
 
     return (expanded_username, expanded_password)
+
+
+def get_registries() -> list[RegistryConfig]:
+    """Get all configured registries.
+
+    Returns list of RegistryConfig objects. Falls back to legacy single
+    registry format if 'registries' key is not present.
+    """
+    config = load_config()
+
+    # Check new multi-registry format
+    registries_config = config.get("registries", [])
+    if registries_config:
+        result = []
+        for reg in registries_config:
+            url = expand_env_vars(reg.get("url"))
+            if not url:
+                continue
+            username = expand_env_vars(reg.get("username"))
+            password = expand_env_vars(reg.get("password"))
+            default = reg.get("default", False)
+            result.append(RegistryConfig(url, username, password, default))
+        return result
+
+    # Fall back to legacy single registry format
+    registry = config.get("registry", {})
+    url = expand_env_vars(registry.get("url"))
+    if not url:
+        url = DEFAULT_REGISTRY
+
+    username = expand_env_vars(registry.get("username"))
+    password = expand_env_vars(registry.get("password"))
+
+    # Legacy format: single registry is always the default
+    return [RegistryConfig(url, username, password, default=True)]
+
+
+def get_push_registry() -> RegistryConfig:
+    """Get the registry to push images to (marked as default).
+
+    Returns the registry marked as default, or the first registry,
+    or a localhost fallback.
+    """
+    registries = get_registries()
+
+    if not registries:
+        return RegistryConfig(DEFAULT_REGISTRY, default=True)
+
+    # Find the one marked as default
+    for reg in registries:
+        if reg.default:
+            return reg
+
+    # If no default is set, use the first one
+    return registries[0]
+
+
+def get_registry_auth_for(registry_url: str) -> tuple[str, str] | None:
+    """Get authentication credentials for a specific registry.
+
+    Matches by URL prefix (e.g., 'ghcr.io' matches 'ghcr.io/myorg/myimage').
+
+    Args:
+        registry_url: The registry URL or image reference to match
+
+    Returns:
+        (username, password) tuple if found, None otherwise
+    """
+    registries = get_registries()
+
+    for reg in registries:
+        # Match by URL prefix
+        if registry_url.startswith(reg.url) or reg.url.startswith(registry_url.split("/")[0]):
+            return reg.get_auth()
+
+    return None
 
 
 class TagConfig(BaseModel):

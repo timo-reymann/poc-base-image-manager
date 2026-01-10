@@ -107,16 +107,34 @@ uv run image-manager stop
 Create `.image-manager.yml` in your project root to customize settings:
 
 ```yaml
-# Custom registry
-registry:
-  url: my-registry.example.com:5000
-
-# With authentication (using environment variables)
+# Single registry (legacy format, still supported)
 registry:
   url: my-registry.example.com:5000
   username: ${REGISTRY_USERNAME}
   password: ${REGISTRY_PASSWORD}
+
+# Multi-registry support
+# Use this when you need to:
+# - Pull from private registries (e.g., for base images)
+# - Push to a specific registry
+registries:
+  # Registry to pull from (e.g., private base images)
+  - url: ghcr.io
+    username: ${GITHUB_USER}
+    password: ${GITHUB_TOKEN}
+
+  # Registry to push built images to (marked as default)
+  - url: my-registry.example.com:5000
+    username: ${REGISTRY_USERNAME}
+    password: ${REGISTRY_PASSWORD}
+    default: true
 ```
+
+**Registry configuration:**
+- `url`: Registry URL (e.g., `ghcr.io`, `my-registry.com:5000`)
+- `username`: Username (supports `${ENV_VAR}` expansion)
+- `password`: Password/token (supports `${ENV_VAR}` expansion)
+- `default`: Set to `true` for the registry to push images to
 
 If no config file exists, defaults to `localhost:5050`.
 
@@ -469,7 +487,6 @@ uv run image-manager generate
 
 ## Missing features
 
-- Configurable external registry endpoint and credentials
 - Configurable external S3 endpoint and credentials
 - CI pipeline generation (GitHub Actions, GitLab CI, etc.)
 - More intelligent version parsing and sorting (potentially via strategy that can be specified)
