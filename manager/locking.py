@@ -13,61 +13,6 @@ from pathlib import Path
 import yaml
 
 
-def get_syft_path() -> Path:
-    """Get the path to the syft binary."""
-    system = platform.system().lower()
-    arch = platform.machine().lower()
-
-    if system == "darwin" and arch == "arm64":
-        plat = "darwin-arm64"
-    elif system == "linux" and arch in ("x86_64", "amd64"):
-        plat = "linux-amd64"
-    elif system == "linux" and arch in ("arm64", "aarch64"):
-        plat = "linux-arm64"
-    else:
-        plat = f"{system}-{arch}"
-
-    return Path(__file__).parent.parent / "bin" / plat / "syft"
-
-
-def extract_distro_from_image(image_tar: Path) -> dict | None:
-    """Extract distro information from an image tar using syft.
-
-    Args:
-        image_tar: Path to the image tar file
-
-    Returns:
-        Dict with distro info (id, versionID, versionCodename) or None
-    """
-    syft = get_syft_path()
-    if not syft.exists():
-        return None
-
-    if not image_tar.exists():
-        return None
-
-    try:
-        result = subprocess.run(
-            [str(syft), "scan", f"docker-archive:{image_tar}", "-o", "json", "-q"],
-            capture_output=True,
-            text=True,
-            timeout=60,
-        )
-        if result.returncode == 0:
-            data = json.loads(result.stdout)
-            distro = data.get("distro", {})
-            if distro:
-                return {
-                    "id": distro.get("id"),
-                    "versionID": distro.get("versionID"),
-                    "versionCodename": distro.get("versionCodename"),
-                    "name": distro.get("name"),
-                }
-        return None
-    except Exception:
-        return None
-
-
 def get_crane_path() -> Path:
     """Get the path to the crane binary."""
     system = platform.system().lower()
@@ -210,7 +155,9 @@ def extract_packages_from_dockerfile(dockerfile_content: str) -> list[str]:
 
 
 def extract_base_image(dockerfile_content: str) -> tuple[str, str] | None:
-    """Extract base image from FROM line.
+    """Extract effective base image from Dockerfile (last FROM line).
+
+    In multi-stage builds, only the last FROM determines the final image's base.
 
     Args:
         dockerfile_content: Content of Dockerfile
@@ -224,75 +171,16 @@ def extract_base_image(dockerfile_content: str) -> tuple[str, str] | None:
     # FROM ubuntu@sha256:abc123 -> ("ubuntu", "sha256:abc123")
     pattern = r"^FROM\s+([^\s:@]+)(?:[:@]([^\s]+))?(?:\s+AS\s+\w+)?$"
 
+    last_match = None
     for line in dockerfile_content.splitlines():
         line = line.strip()
         match = re.match(pattern, line, re.IGNORECASE)
         if match:
             image = match.group(1)
             tag_or_digest = match.group(2) or "latest"
-            return (image, tag_or_digest)
+            last_match = (image, tag_or_digest)
 
-    return None
-
-
-def resolve_ubuntu_version(dockerfile_path: Path, images_dir: Path, lock_path: Path | None = None) -> tuple[str, str] | None:
-    """Resolve Ubuntu version from base image.
-
-    For local base images, inspects the built image tar with syft.
-    For ubuntu directly, uses the tag version.
-
-    Args:
-        dockerfile_path: Path to generated Dockerfile
-        images_dir: Path to images directory for resolving local bases
-        lock_path: Optional path to lock file (for extracting version from digest)
-
-    Returns:
-        Tuple of (version, codename) or None if not Ubuntu-based
-    """
-    content = dockerfile_path.read_text()
-    base = extract_base_image(content)
-
-    if not base:
-        return None
-
-    image, tag_or_digest = base
-
-    # Check if it's Ubuntu directly
-    if image == "ubuntu":
-        # Handle digest reference - need to look up original version from lock file
-        if tag_or_digest.startswith("sha256:"):
-            if lock_path and lock_path.exists():
-                data = yaml.safe_load(lock_path.read_text())
-                if data:
-                    meta = data.get("_meta", {})
-                    base_info = meta.get("base", {})
-                    if isinstance(base_info, dict):
-                        original = base_info.get("original", "")
-                        if original.startswith("ubuntu:"):
-                            version = original.split(":", 1)[1]
-                            codename = meta.get("codename")
-                            if codename:
-                                return (version, codename)
-            return None
-
-        codename = get_ubuntu_codename(tag_or_digest)
-        return (tag_or_digest, codename)
-
-    # Check if it's a local image - inspect the built image tar with syft
-    # Local images are referenced by name only (no registry prefix)
-    if "/" not in image and image not in ("ubuntu", "alpine", "debian"):
-        dist_dir = dockerfile_path.parent.parent.parent
-        base_image_tar = dist_dir / image / tag_or_digest / "image.tar"
-
-        if base_image_tar.exists():
-            distro = extract_distro_from_image(base_image_tar)
-            if distro and distro.get("id") == "ubuntu":
-                version_id = distro.get("versionID")
-                codename = distro.get("versionCodename")
-                if version_id and codename:
-                    return (version_id, codename)
-
-    return None
+    return last_match
 
 
 def read_lock_file(lock_path: Path, base_ref: str | None = None) -> dict[str, str]:
