@@ -16,7 +16,7 @@ e.g. runtime images.
 
 ## Bundled Tools
 
-The following tools are bundled in `bin/` for linux-amd64 and darwin-arm64:
+The following tools are bundled in `bin/` for linux-amd64, linux-arm64, and darwin-arm64:
 
 | Tool | Version | Purpose |
 |------|---------|---------|

@@ -155,6 +155,8 @@ def get_bin_path() -> Path:
         platform_dir = "darwin-arm64"
     elif system == "linux" and machine in ("x86_64", "amd64"):
         platform_dir = "linux-amd64"
+    elif system == "linux" and machine in ("arm64", "aarch64"):
+        platform_dir = "linux-arm64"
     else:
         raise RuntimeError(f"Unsupported platform: {system}-{machine}")
 

@@ -21,6 +21,8 @@ def get_crane_path() -> Path:
         plat = "darwin-arm64"
     elif system == "linux" and arch in ("x86_64", "amd64"):
         plat = "linux-amd64"
+    elif system == "linux" and arch in ("arm64", "aarch64"):
+        plat = "linux-arm64"
     else:
         plat = f"{system}-{arch}"
 
