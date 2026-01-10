@@ -680,23 +680,33 @@ def cmd_lock(args: list[str]) -> int:
     from manager.locking import run_lock
 
     if not args:
-        # Lock all images
+        # Lock all images - get one ref per image (first tag)
         image_refs = []
         dist_path = Path("dist")
         if not dist_path.exists():
             print("Error: No generated files found. Run 'image-manager generate' first.", file=sys.stderr)
             return 1
+        seen_images = set()
         for dockerfile in dist_path.glob("*/*/Dockerfile"):
             name = dockerfile.parent.parent.name
             tag = dockerfile.parent.name
-            # Skip alias files (they contain just the target tag name)
-            if dockerfile.stat().st_size > 100:  # Dockerfiles are larger than alias files
+            # Skip alias files and already seen images
+            if dockerfile.stat().st_size > 100 and name not in seen_images:
                 image_refs.append(f"{name}:{tag}")
-        print(f"Locking all images ({len(image_refs)} total)...")
+                seen_images.add(name)
+        print(f"Locking {len(image_refs)} image(s)...")
     else:
-        # Expand image names to all their tags
+        # Expand image names to refs, then dedupe to one per image
         try:
-            image_refs = expand_image_refs(args)
+            expanded = expand_image_refs(args)
+            # Keep only the first tag for each image
+            seen_images = set()
+            image_refs = []
+            for ref in expanded:
+                name = ref.split(":")[0]
+                if name not in seen_images:
+                    image_refs.append(ref)
+                    seen_images.add(name)
             print(f"Locking {len(image_refs)} image(s)...")
         except CyclicDependencyError as e:
             print(f"Error: {e}", file=sys.stderr)

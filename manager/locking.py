@@ -6,6 +6,7 @@ import subprocess
 import urllib.request
 import urllib.parse
 import json
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -494,16 +495,26 @@ def run_lock(
 
         print(f"Found {len(packages)} packages: {', '.join(packages)}")
 
-        # Resolve versions
+        # Resolve versions in parallel
+        print("  Resolving package versions...")
         locked = {}
-        for pkg in packages:
-            print(f"  Resolving {pkg}...", end=" ", flush=True)
-            version = get_package_version(pkg, codename)
-            if version:
-                locked[pkg] = version
-                print(f"{version}")
-            else:
-                print("NOT FOUND")
+        not_found = []
+
+        def resolve_pkg(pkg: str) -> tuple[str, str | None]:
+            return (pkg, get_package_version(pkg, codename))
+
+        with ThreadPoolExecutor(max_workers=8) as executor:
+            futures = {executor.submit(resolve_pkg, pkg): pkg for pkg in packages}
+            for future in as_completed(futures):
+                pkg, version = future.result()
+                if version:
+                    locked[pkg] = version
+                    print(f"    {pkg}: {version}")
+                else:
+                    not_found.append(pkg)
+
+        if not_found:
+            print(f"  Not found: {', '.join(not_found)}")
 
         if not locked:
             print("Error: Could not resolve any package versions")
