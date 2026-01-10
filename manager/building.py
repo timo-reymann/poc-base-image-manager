@@ -10,6 +10,7 @@ import subprocess
 import sys
 import tempfile
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 
 import docker
@@ -726,6 +727,71 @@ def get_platform_tar_path(image_ref: str, plat: str) -> Path:
     return Path("dist") / name / tag / platform_dir / "image.tar"
 
 
+def _get_git_revision() -> str | None:
+    """Get the current git commit SHA if in a git repository."""
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        if result.returncode == 0:
+            return result.stdout.strip()
+    except Exception:
+        pass
+    return None
+
+
+def _get_base_image_info(context_path: Path) -> tuple[str, str | None] | None:
+    """Extract base image name and digest from Dockerfile and lock file.
+
+    Args:
+        context_path: Path to build context containing Dockerfile
+
+    Returns:
+        Tuple of (base_name, base_digest) or None if not found.
+        base_digest may be None if not available in lock file.
+    """
+    dockerfile = context_path / "Dockerfile"
+    if not dockerfile.exists():
+        return None
+
+    content = dockerfile.read_text()
+
+    # Find the last FROM line (for multi-stage builds)
+    from_pattern = re.compile(r"^FROM\s+([^\s]+)", re.MULTILINE | re.IGNORECASE)
+    matches = from_pattern.findall(content)
+    if not matches:
+        return None
+
+    base_ref = matches[-1]  # Last FROM is the effective base
+
+    # Check if it's already a digest reference
+    if "@sha256:" in base_ref:
+        # Already pinned: ubuntu@sha256:abc123
+        parts = base_ref.split("@")
+        return (parts[0], parts[1])
+
+    # Try to get digest from lock file
+    lock_file = context_path.parent.parent.parent / "images"
+    # Find the image.yml directory to locate packages.lock
+    image_name = context_path.parent.parent.name
+    for lock_path in Path("images").rglob("packages.lock"):
+        if image_name in str(lock_path):
+            try:
+                import yaml
+                data = yaml.safe_load(lock_path.read_text())
+                if data and "bases" in data:
+                    for base_name, base_info in data["bases"].items():
+                        if base_name == base_ref or base_ref.startswith(base_name.split(":")[0]):
+                            return (base_ref, base_info.get("digest"))
+            except Exception:
+                pass
+
+    return (base_ref, None)
+
+
 def run_build_platform(
     image_ref: str,
     plat: str,
@@ -791,9 +857,24 @@ def run_build_platform(
 
     # OCI image labels (https://github.com/opencontainers/image-spec/blob/main/annotations.md)
     label_args = [
-        "--opt", f"label:org.opencontainers.image.ref.name={image_ref}",
+        "--opt", f"label:org.opencontainers.image.ref.name={image_name}",
         "--opt", f"label:org.opencontainers.image.version={image_tag}",
+        "--opt", f"label:org.opencontainers.image.title={image_name}",
+        "--opt", f"label:org.opencontainers.image.created={datetime.fromtimestamp(int(SOURCE_DATE_EPOCH), tz=timezone.utc).isoformat()}",
     ]
+
+    # Add git revision if available
+    git_rev = _get_git_revision()
+    if git_rev:
+        label_args.extend(["--opt", f"label:org.opencontainers.image.revision={git_rev}"])
+
+    # Add base image labels from Dockerfile
+    base_info = _get_base_image_info(context_path)
+    if base_info:
+        base_name, base_digest = base_info
+        label_args.extend(["--opt", f"label:org.opencontainers.image.base.name={base_name}"])
+        if base_digest:
+            label_args.extend(["--opt", f"label:org.opencontainers.image.base.digest={base_digest}"])
 
     if modified_content != original_content:
         with tempfile.TemporaryDirectory() as tmpdir:
