@@ -195,18 +195,24 @@ description: "Human-readable description of the image"
 licenses: "Apache-2.0"  # Overrides global licenses
 ```
 
-**Automatically detected labels:**
+**All supported OCI labels:**
 
-| Label | Source |
-|-------|--------|
-| `org.opencontainers.image.ref.name` | Image name |
-| `org.opencontainers.image.version` | Image tag |
-| `org.opencontainers.image.title` | Image name |
-| `org.opencontainers.image.created` | Build timestamp (RFC 3339) |
-| `org.opencontainers.image.revision` | Git commit SHA |
-| `org.opencontainers.image.source` | Git remote URL (converted to HTTPS) |
-| `org.opencontainers.image.base.name` | Base image from Dockerfile |
-| `org.opencontainers.image.base.digest` | Base image digest from lock file |
+| Label | Source | Notes |
+|-------|--------|-------|
+| `org.opencontainers.image.ref.name` | Auto | Image name (e.g., `base`) |
+| `org.opencontainers.image.version` | Auto | Image tag (e.g., `2025.09`) |
+| `org.opencontainers.image.title` | Auto | Same as image name |
+| `org.opencontainers.image.created` | Auto | Build timestamp (RFC 3339) |
+| `org.opencontainers.image.revision` | Auto | Git commit SHA (if in git repo) |
+| `org.opencontainers.image.source` | Auto | Git remote URL (converted to HTTPS) |
+| `org.opencontainers.image.base.name` | Auto | Base image from last FROM in Dockerfile |
+| `org.opencontainers.image.base.digest` | Auto | Base image digest (from lock file) |
+| `org.opencontainers.image.vendor` | Global config | Set if `labels.vendor` configured |
+| `org.opencontainers.image.authors` | Global config | Set if `labels.authors` configured |
+| `org.opencontainers.image.url` | Global config | Supports `%image%`/`%tag%` placeholders |
+| `org.opencontainers.image.documentation` | Global config | Supports `%image%`/`%tag%` placeholders |
+| `org.opencontainers.image.licenses` | Global/image | Image-level overrides global |
+| `org.opencontainers.image.description` | image.yml | Per-image description |
 
 ### Infrastructure setup
 
