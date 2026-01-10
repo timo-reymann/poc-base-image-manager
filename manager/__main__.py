@@ -679,48 +679,47 @@ def cmd_lock(args: list[str]) -> int:
     """Generate packages.lock for an image."""
     from manager.locking import run_lock
 
+    # Group refs by image name
+    image_to_refs: dict[str, list[str]] = {}
+
     if not args:
-        # Lock all images - get one ref per image (first tag)
-        image_refs = []
+        # Lock all images - collect all refs grouped by image
         dist_path = Path("dist")
         if not dist_path.exists():
             print("Error: No generated files found. Run 'image-manager generate' first.", file=sys.stderr)
             return 1
-        seen_images = set()
         for dockerfile in dist_path.glob("*/*/Dockerfile"):
             name = dockerfile.parent.parent.name
             tag = dockerfile.parent.name
-            # Skip alias files and already seen images
-            if dockerfile.stat().st_size > 100 and name not in seen_images:
-                image_refs.append(f"{name}:{tag}")
-                seen_images.add(name)
-        print(f"Locking {len(image_refs)} image(s)...")
+            # Skip alias files
+            if dockerfile.stat().st_size > 100:
+                if name not in image_to_refs:
+                    image_to_refs[name] = []
+                image_to_refs[name].append(f"{name}:{tag}")
     else:
-        # Expand image names to refs, then dedupe to one per image
+        # Expand image names to refs, group by image
         try:
             expanded = expand_image_refs(args)
-            # Keep only the first tag for each image
-            seen_images = set()
-            image_refs = []
             for ref in expanded:
                 name = ref.split(":")[0]
-                if name not in seen_images:
-                    image_refs.append(ref)
-                    seen_images.add(name)
-            print(f"Locking {len(image_refs)} image(s)...")
+                if name not in image_to_refs:
+                    image_to_refs[name] = []
+                image_to_refs[name].append(ref)
         except CyclicDependencyError as e:
             print(f"Error: {e}", file=sys.stderr)
             return 1
+
+    print(f"Locking {len(image_to_refs)} image(s)...")
 
     images_dir = Path("images")
     dist_dir = Path("dist")
 
     exit_code = 0
-    for image_ref in image_refs:
+    for image_name, refs in image_to_refs.items():
         print(f"\n{'='*60}")
-        print(f"Locking {image_ref}")
+        print(f"Locking {image_name} ({len(refs)} tags)")
         print('='*60)
-        result = run_lock(image_ref, images_dir, dist_dir)
+        result = run_lock(refs, images_dir, dist_dir)
         if result != 0:
             exit_code = result
 

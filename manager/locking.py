@@ -429,49 +429,58 @@ def rewrite_from_digest(
 
 
 def run_lock(
-    image_ref: str,
+    image_refs: list[str],
     images_dir: Path,
     dist_dir: Path,
 ) -> int:
-    """Generate packages.lock for an image.
+    """Generate packages.lock for an image, aggregating packages from all tags.
 
     Args:
-        image_ref: Image reference like "base:2025.09"
+        image_refs: List of image references for the same image (e.g., ['python:3.13.7', 'python:3.13.6'])
         images_dir: Path to images directory
         dist_dir: Path to dist directory with generated Dockerfiles
 
     Returns:
         Exit code (0 for success)
     """
-    name, tag = image_ref.split(":")
+    if not image_refs:
+        return 0
 
-    # Find the generated Dockerfile
-    dockerfile_path = dist_dir / name / tag / "Dockerfile"
-    if not dockerfile_path.exists():
-        print(f"Error: Generated Dockerfile not found: {dockerfile_path}")
-        print("Run 'image-manager generate' first")
-        return 1
+    # All refs should be for the same image
+    name = image_refs[0].split(":")[0]
+    first_tag = image_refs[0].split(":")[1]
 
-    # Determine lock file path first - we may need it for resolving digest references
-    # Find the image source directory
+    # Determine lock file path
     image_dir = None
     for subdir in images_dir.rglob("image.yml"):
-        # Check if this is the right image
         parent = subdir.parent
         if parent.parent.name == name or (parent.parent.parent.exists() and parent.parent.parent.name == name):
             image_dir = parent
             break
 
     if not image_dir:
-        # Fallback: use dist directory
-        image_dir = dist_dir / name / tag
+        image_dir = dist_dir / name / first_tag
 
     lock_path = image_dir / "packages.lock"
 
-    # Resolve Ubuntu version (pass lock_path to handle digest references)
+    # Find first valid Dockerfile to determine Ubuntu version
+    dockerfile_path = None
+    for ref in image_refs:
+        tag = ref.split(":")[1]
+        path = dist_dir / name / tag / "Dockerfile"
+        if path.exists():
+            dockerfile_path = path
+            break
+
+    if not dockerfile_path:
+        print(f"Error: No generated Dockerfile found for {name}")
+        print("Run 'image-manager generate' first")
+        return 1
+
+    # Resolve Ubuntu version
     ubuntu_info = resolve_ubuntu_version(dockerfile_path, images_dir, lock_path)
     if not ubuntu_info:
-        print(f"Error: Could not determine Ubuntu version for {image_ref}")
+        print(f"Error: Could not determine Ubuntu version for {name}")
         print("Package locking currently only supports Ubuntu-based images")
         return 1
 
@@ -484,16 +493,24 @@ def run_lock(
         print(f"Using {len(existing_packages)} existing locked packages")
         locked = existing_packages
     else:
-        # Extract packages from Dockerfile
-        content = dockerfile_path.read_text()
-        packages = extract_packages_from_dockerfile(content)
+        # Extract packages from ALL tag Dockerfiles
+        all_packages = set()
+        for ref in image_refs:
+            tag = ref.split(":")[1]
+            path = dist_dir / name / tag / "Dockerfile"
+            if path.exists():
+                content = path.read_text()
+                packages = extract_packages_from_dockerfile(content)
+                if packages:
+                    print(f"  {tag}: {len(packages)} packages")
+                    all_packages.update(packages)
 
-        if not packages:
-            print("No apt-get install commands found in Dockerfile")
-            print("Hint: Run 'image-manager generate' first, then lock before adding version pins")
+        if not all_packages:
+            print("No apt-get install commands found in any Dockerfile")
             return 0
 
-        print(f"Found {len(packages)} packages: {', '.join(packages)}")
+        packages = sorted(all_packages)
+        print(f"Total unique packages: {len(packages)}")
 
         # Resolve versions in parallel
         print("  Resolving package versions...")
