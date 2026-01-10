@@ -13,21 +13,67 @@ from pathlib import Path
 import yaml
 
 
-def get_crane_path() -> Path:
-    """Get the path to the crane binary."""
+def _get_bin_platform() -> str:
+    """Get the platform directory for bundled binaries."""
     system = platform.system().lower()
     arch = platform.machine().lower()
 
     if system == "darwin" and arch == "arm64":
-        plat = "darwin-arm64"
+        return "darwin-arm64"
     elif system == "linux" and arch in ("x86_64", "amd64"):
-        plat = "linux-amd64"
+        return "linux-amd64"
     elif system == "linux" and arch in ("arm64", "aarch64"):
-        plat = "linux-arm64"
+        return "linux-arm64"
     else:
-        plat = f"{system}-{arch}"
+        return f"{system}-{arch}"
 
-    return Path(__file__).parent.parent / "bin" / plat / "crane"
+
+def get_crane_path() -> Path:
+    """Get the path to the crane binary."""
+    return Path(__file__).parent.parent / "bin" / _get_bin_platform() / "crane"
+
+
+def get_syft_path() -> Path:
+    """Get the path to the syft binary."""
+    return Path(__file__).parent.parent / "bin" / _get_bin_platform() / "syft"
+
+
+def extract_distro_from_image(image_tar: Path) -> dict | None:
+    """Extract distro information from an image tar using syft.
+
+    Args:
+        image_tar: Path to the image tar file
+
+    Returns:
+        Dict with distro info (id, versionID, versionCodename) or None
+    """
+    syft = get_syft_path()
+    if not syft.exists():
+        return None
+
+    if not image_tar.exists():
+        return None
+
+    try:
+        result = subprocess.run(
+            [str(syft), "scan", f"docker-archive:{image_tar}", "-o", "json", "-q"],
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+        if result.returncode == 0:
+            data = json.loads(result.stdout)
+            distro = data.get("distro", {})
+            if distro:
+                return {
+                    "id": distro.get("id"),
+                    "versionID": distro.get("versionID"),
+                    "versionCodename": distro.get("versionCodename"),
+                    "name": distro.get("name"),
+                }
+        return None
+    except Exception:
+        return None
 
 
 def resolve_image_digest(image_ref: str) -> str | None:
@@ -353,13 +399,20 @@ def rewrite_from_digest(
 
 
 def _get_base_ref(dockerfile_path: Path, dist_dir: Path) -> str | None:
-    """Get the effective base image reference for a Dockerfile.
+    """Get the effective Ubuntu base reference for a Dockerfile.
 
-    For local images (like 'base:2025.09'), follows the chain to find ubuntu.
-    Returns a normalized ref like 'ubuntu:24.04'.
+    Uses syft to inspect built base images and extract the actual Ubuntu version.
+    Falls back to Dockerfile parsing if image tar not available.
+
+    Args:
+        dockerfile_path: Path to the Dockerfile
+        dist_dir: Path to dist directory with built images
+
+    Returns:
+        Normalized ref like 'ubuntu:24.04' or None if not Ubuntu-based
     """
     content = dockerfile_path.read_text()
-    base = extract_base_image(content)
+    base = extract_base_image(content)  # Gets last FROM (multi-stage aware)
     if not base:
         return None
 
@@ -367,13 +420,21 @@ def _get_base_ref(dockerfile_path: Path, dist_dir: Path) -> str | None:
 
     # Direct ubuntu reference
     if image == "ubuntu":
-        # Strip digest if present
         if tag.startswith("sha256:"):
             return None  # Can't determine version from digest alone
         return f"ubuntu:{tag}"
 
-    # Local image - check its base
+    # Local image - use syft to inspect the built image tar
     if "/" not in image and image not in ("alpine", "debian"):
+        image_tar = dist_dir / image / tag / "image.tar"
+        if image_tar.exists():
+            distro = extract_distro_from_image(image_tar)
+            if distro and distro.get("id") == "ubuntu":
+                version = distro.get("versionID")
+                if version:
+                    return f"ubuntu:{version}"
+
+        # Fallback: follow Dockerfile chain if tar not available
         base_dockerfile = dist_dir / image / tag / "Dockerfile"
         if base_dockerfile.exists():
             return _get_base_ref(base_dockerfile, dist_dir)
