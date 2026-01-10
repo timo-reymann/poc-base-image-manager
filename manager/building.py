@@ -14,7 +14,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import docker
-from manager.config import get_registry_url, get_registry_auth, get_registries, get_push_registry, get_cache_config
+from manager.config import get_registry_url, get_registry_auth, get_registries, get_push_registry, get_cache_config, get_labels_config, ConfigLoader
 from manager.rendering import generate_tag_report
 from docker.errors import NotFound, APIError
 
@@ -743,6 +743,30 @@ def _get_git_revision() -> str | None:
     return None
 
 
+def _get_git_remote_url() -> str | None:
+    """Get the git remote URL, converted to HTTPS format for source label."""
+    try:
+        result = subprocess.run(
+            ["git", "remote", "get-url", "origin"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        if result.returncode == 0:
+            url = result.stdout.strip()
+            # Convert SSH URL to HTTPS if needed
+            # git@github.com:user/repo.git -> https://github.com/user/repo
+            if url.startswith("git@"):
+                url = url.replace(":", "/").replace("git@", "https://")
+            # Remove .git suffix
+            if url.endswith(".git"):
+                url = url[:-4]
+            return url
+    except Exception:
+        pass
+    return None
+
+
 def _get_base_image_info(context_path: Path) -> tuple[str, str | None] | None:
     """Extract base image name and digest from Dockerfile and lock file.
 
@@ -790,6 +814,35 @@ def _get_base_image_info(context_path: Path) -> tuple[str, str | None] | None:
                 pass
 
     return (base_ref, None)
+
+
+def _get_image_config(image_name: str):
+    """Load image.yml config for an image to get description and licenses.
+
+    Args:
+        image_name: Image name (e.g., "base", "python")
+
+    Returns:
+        ImageConfig or None if not found
+    """
+    images_dir = Path("images")
+    if not images_dir.exists():
+        return None
+
+    # Search for image.yml in the images directory
+    for image_yml in images_dir.rglob("image.yml"):
+        try:
+            config = ConfigLoader.load(image_yml)
+            # Check if this is the right image by name or directory
+            if config.name == image_name:
+                return config
+            # Also check parent directory name
+            if image_yml.parent.name == image_name or image_yml.parent.parent.name == image_name:
+                return config
+        except Exception:
+            continue
+
+    return None
 
 
 def run_build_platform(
@@ -867,6 +920,39 @@ def run_build_platform(
     git_rev = _get_git_revision()
     if git_rev:
         label_args.extend(["--opt", f"label:org.opencontainers.image.revision={git_rev}"])
+
+    # Add source from git remote
+    git_source = _get_git_remote_url()
+    if git_source:
+        label_args.extend(["--opt", f"label:org.opencontainers.image.source={git_source}"])
+
+    # Add global labels from config
+    labels_config = get_labels_config()
+    if labels_config.vendor:
+        label_args.extend(["--opt", f"label:org.opencontainers.image.vendor={labels_config.vendor}"])
+    if labels_config.authors:
+        label_args.extend(["--opt", f"label:org.opencontainers.image.authors={labels_config.authors}"])
+    if labels_config.url:
+        # Apply %image% and %tag% placeholders
+        url = labels_config.url.replace("%image%", image_name).replace("%tag%", image_tag)
+        label_args.extend(["--opt", f"label:org.opencontainers.image.url={url}"])
+    if labels_config.documentation:
+        # Apply %image% and %tag% placeholders
+        doc_url = labels_config.documentation.replace("%image%", image_name).replace("%tag%", image_tag)
+        label_args.extend(["--opt", f"label:org.opencontainers.image.documentation={doc_url}"])
+
+    # Add per-image labels from image.yml (description, licenses)
+    image_config = _get_image_config(image_name)
+    if image_config:
+        if image_config.description:
+            label_args.extend(["--opt", f"label:org.opencontainers.image.description={image_config.description}"])
+        # Image-level licenses override global
+        if image_config.licenses:
+            label_args.extend(["--opt", f"label:org.opencontainers.image.licenses={image_config.licenses}"])
+        elif labels_config.licenses:
+            label_args.extend(["--opt", f"label:org.opencontainers.image.licenses={labels_config.licenses}"])
+    elif labels_config.licenses:
+        label_args.extend(["--opt", f"label:org.opencontainers.image.licenses={labels_config.licenses}"])
 
     # Add base image labels from Dockerfile
     base_info = _get_base_image_info(context_path)

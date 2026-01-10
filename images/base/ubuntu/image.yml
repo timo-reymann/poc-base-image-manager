@@ -1,4 +1,5 @@
 name: base
+description: "Base Ubuntu image with common utilities and security updates"
 is_base_image: true
 tags:
   - name: "2025.09"

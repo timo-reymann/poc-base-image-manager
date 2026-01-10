@@ -168,6 +168,46 @@ cache: false
 
 If no cache config is provided, defaults to local Garage instance at `localhost:3900`.
 
+### OCI Image Labels
+
+Built images automatically include [OCI annotations](https://github.com/opencontainers/image-spec/blob/main/annotations.md). Configure global labels in `.image-manager.yml`:
+
+```yaml
+labels:
+  vendor: "My Company"
+  authors: "Name <email@example.com>"
+  url: "https://example.com/images/%image%/%tag%"
+  documentation: "https://docs.example.com/%image%"
+  licenses: "MIT"
+```
+
+**Global label configuration:**
+- `vendor`: Organization or company name
+- `authors`: Contact details (e.g., `Name <email>`)
+- `url`: URL to image info page (supports `%image%` and `%tag%` placeholders)
+- `documentation`: URL to documentation (supports `%image%` and `%tag%` placeholders)
+- `licenses`: SPDX license expression (can be overridden per-image)
+
+**Per-image labels** in `image.yml`:
+```yaml
+name: myimage
+description: "Human-readable description of the image"
+licenses: "Apache-2.0"  # Overrides global licenses
+```
+
+**Automatically detected labels:**
+
+| Label | Source |
+|-------|--------|
+| `org.opencontainers.image.ref.name` | Image name |
+| `org.opencontainers.image.version` | Image tag |
+| `org.opencontainers.image.title` | Image name |
+| `org.opencontainers.image.created` | Build timestamp (RFC 3339) |
+| `org.opencontainers.image.revision` | Git commit SHA |
+| `org.opencontainers.image.source` | Git remote URL (converted to HTTPS) |
+| `org.opencontainers.image.base.name` | Base image from Dockerfile |
+| `org.opencontainers.image.base.digest` | Base image digest from lock file |
+
 ### Infrastructure setup
 
 Start the infrastructure services (registry, cache):

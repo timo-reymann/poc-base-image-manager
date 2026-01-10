@@ -1,0 +1,5 @@
+# Image Manager Configuration
+
+labels:
+  authors: "Timo Reymann <mail@timo-reymann.de>"
+  documentation: "https://github.com/timo-reymann/poc-container-image-manager/blob/main/images/%image%"

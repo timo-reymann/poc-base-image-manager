@@ -343,6 +343,56 @@ def get_cache_config() -> CacheConfig | None:
     )
 
 
+# --- OCI Labels Configuration ---
+
+class LabelsConfig:
+    """Configuration for OCI image labels."""
+
+    def __init__(
+        self,
+        vendor: str | None = None,
+        authors: str | None = None,
+        url: str | None = None,
+        documentation: str | None = None,
+        licenses: str | None = None,
+    ):
+        self.vendor = vendor
+        self.authors = authors
+        self.url = url  # Can contain %image% and %tag% placeholders
+        self.documentation = documentation  # Can contain %image% and %tag% placeholders
+        self.licenses = licenses
+
+
+def get_labels_config() -> LabelsConfig:
+    """Get global OCI labels configuration.
+
+    Configuration format in .image-manager.yml:
+        labels:
+          vendor: "My Company"
+          authors: "Name <email@example.com>"
+          url: "https://example.com/images/%image%/%tag%"
+          documentation: "https://docs.example.com/%image%"
+          licenses: "MIT"
+
+    The url and documentation fields support placeholders:
+      - %image% - Image name (e.g., "base")
+      - %tag% - Image tag (e.g., "2025.09")
+    """
+    config = load_config()
+    labels_config = config.get("labels", {})
+
+    if not labels_config or not isinstance(labels_config, dict):
+        return LabelsConfig()
+
+    return LabelsConfig(
+        vendor=expand_env_vars(labels_config.get("vendor")),
+        authors=expand_env_vars(labels_config.get("authors")),
+        url=expand_env_vars(labels_config.get("url")),
+        documentation=expand_env_vars(labels_config.get("documentation")),
+        licenses=expand_env_vars(labels_config.get("licenses")),
+    )
+
+
 class TagConfig(BaseModel):
     """Configuration for a single tag"""
     name: str
@@ -376,6 +426,9 @@ class ImageConfig(BaseModel):
     aliases: dict[str, str] = {}
     rootfs_user: str | None = None
     rootfs_copy: bool | None = None
+    # OCI labels
+    description: str | None = None  # org.opencontainers.image.description
+    licenses: str | None = None  # org.opencontainers.image.licenses (overrides global)
 
 
 class ConfigLoader:
