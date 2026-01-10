@@ -778,6 +778,9 @@ def run_build_platform(
     # Platform-specific image name for registry
     platform_image_ref = f"{image_ref}-{platform_path}"
 
+    # Extract name and tag for labels
+    image_name, image_tag = image_ref.split(":", 1)
+
     # Build reproducibility args
     repro_args = [
         "--opt", f"build-arg:SOURCE_DATE_EPOCH={SOURCE_DATE_EPOCH}",
@@ -785,6 +788,12 @@ def run_build_platform(
     policy_file = context_path / "policy.json"
     if policy_file.exists():
         repro_args.extend(["--source-policy-file", str(policy_file)])
+
+    # OCI image labels (https://github.com/opencontainers/image-spec/blob/main/annotations.md)
+    label_args = [
+        "--opt", f"label:org.opencontainers.image.ref.name={image_ref}",
+        "--opt", f"label:org.opencontainers.image.version={image_tag}",
+    ]
 
     if modified_content != original_content:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -798,7 +807,7 @@ def run_build_platform(
                 "--local", f"dockerfile={tmpdir}",
                 "--output", f"type=docker,name={platform_image_ref},dest={tar_path},rewrite-timestamp=true",
                 "--opt", f"platform={plat}",
-            ] + repro_args + cache_args
+            ] + repro_args + label_args + cache_args
 
             print(f"Building {image_ref} for {plat}...")
             result = subprocess.run(cmd)
@@ -810,7 +819,7 @@ def run_build_platform(
             "--local", f"dockerfile={context_path}",
             "--output", f"type=docker,name={platform_image_ref},dest={tar_path},rewrite-timestamp=true",
             "--opt", f"platform={plat}",
-        ] + repro_args + cache_args
+        ] + repro_args + label_args + cache_args
 
         print(f"Building {image_ref} for {plat}...")
         result = subprocess.run(cmd)
