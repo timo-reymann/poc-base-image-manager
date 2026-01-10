@@ -612,6 +612,134 @@ def push_to_registry(tar_path: Path, image_ref: str) -> bool:
     return True
 
 
+def get_aliases_for_tag(image_name: str, tag_name: str) -> list[str]:
+    """Get all aliases that point to a specific tag.
+
+    Scans dist/<image>/ for alias files (non-directories) where content matches tag_name.
+
+    Args:
+        image_name: Image name (e.g., 'dotnet')
+        tag_name: Tag name to find aliases for (e.g., '9.0.300')
+
+    Returns:
+        List of alias names that point to this tag (e.g., ['9', '9.0'])
+    """
+    aliases = []
+    dist_path = Path("dist") / image_name
+
+    if not dist_path.exists():
+        return aliases
+
+    for entry in dist_path.iterdir():
+        # Skip directories (actual tag builds) and special files
+        if entry.is_dir() or entry.name.startswith(".") or entry.name == "index.html":
+            continue
+
+        # Read alias file content
+        try:
+            content = entry.read_text().strip()
+            if content == tag_name:
+                aliases.append(entry.name)
+        except Exception:
+            continue
+
+    return aliases
+
+
+def tag_aliases(image_ref: str, snapshot_id: str | None = None) -> int:
+    """Apply all aliases for an image using crane tag.
+
+    Tags an existing registry image with its aliases (e.g., dotnet:9.0.300 -> dotnet:9).
+
+    Args:
+        image_ref: Image reference in format 'name:tag' (e.g., 'dotnet:9.0.300')
+        snapshot_id: Optional snapshot identifier for registry tags
+
+    Returns:
+        Exit code (0 for success, 1 if image not found or tagging failed)
+    """
+    if ":" not in image_ref:
+        print(f"Error: Invalid image reference '{image_ref}', expected format: name:tag", file=sys.stderr)
+        return 1
+
+    name, tag = image_ref.split(":", 1)
+    crane = get_crane_path()
+    registry = get_registry_addr()
+
+    # Build source image reference
+    if snapshot_id:
+        source_ref = f"{registry}/{name}:{tag}-{snapshot_id}"
+    else:
+        source_ref = f"{registry}/{name}:{tag}"
+
+    # Check if source image exists
+    check_cmd = [str(crane), "digest", "--insecure", source_ref]
+    result = subprocess.run(check_cmd, capture_output=True, text=True)
+    if result.returncode != 0:
+        print(f"Error: Image not found in registry: {source_ref}", file=sys.stderr)
+        return 1
+
+    # Get aliases for this tag
+    aliases = get_aliases_for_tag(name, tag)
+    if not aliases:
+        print(f"No aliases found for {image_ref}")
+        return 0
+
+    print(f"Applying {len(aliases)} alias(es) for {image_ref}: {', '.join(aliases)}")
+
+    # Tag each alias
+    failed = []
+    for alias in aliases:
+        # Build the alias tag name (crane tag expects just the tag, not full ref)
+        if snapshot_id:
+            alias_tag = f"{alias}-{snapshot_id}"
+        else:
+            alias_tag = alias
+
+        # crane tag IMG TAG - tags IMG with TAG
+        tag_cmd = [str(crane), "tag", "--insecure", source_ref, alias_tag]
+        tag_result = subprocess.run(tag_cmd, capture_output=True, text=True)
+
+        if tag_result.returncode != 0:
+            print(f"  Failed to tag {alias}: {tag_result.stderr}", file=sys.stderr)
+            failed.append(alias)
+        else:
+            print(f"  Tagged: {registry}/{name}:{alias_tag}")
+
+    if failed:
+        print(f"Warning: Failed to apply {len(failed)} alias(es)", file=sys.stderr)
+        return 1
+
+    return 0
+
+
+def check_image_exists(image_ref: str, snapshot_id: str | None = None) -> bool:
+    """Check if an image exists in the registry.
+
+    Args:
+        image_ref: Image reference in format 'name:tag'
+        snapshot_id: Optional snapshot identifier
+
+    Returns:
+        True if image exists, False otherwise
+    """
+    if ":" not in image_ref:
+        return False
+
+    name, tag = image_ref.split(":", 1)
+    crane = get_crane_path()
+    registry = get_registry_addr()
+
+    if snapshot_id:
+        full_ref = f"{registry}/{name}:{tag}-{snapshot_id}"
+    else:
+        full_ref = f"{registry}/{name}:{tag}"
+
+    check_cmd = [str(crane), "digest", "--insecure", full_ref]
+    result = subprocess.run(check_cmd, capture_output=True, text=True)
+    return result.returncode == 0
+
+
 def get_local_images() -> set[str]:
     """Get set of image references available in dist/ (already built)."""
     images = set()
@@ -1249,6 +1377,11 @@ def run_build(
     name, tag = image_ref.split(":", 1)
     report_path = generate_tag_report(name, tag, snapshot_id)
     print(f"Tag report: {report_path}")
+
+    # Apply aliases to the built image
+    alias_result = tag_aliases(image_ref, snapshot_id)
+    if alias_result != 0:
+        print("Warning: Some aliases failed to apply", file=sys.stderr)
 
     return 0
 

@@ -20,6 +20,7 @@ def print_usage() -> None:
     print("  generate            Generate Dockerfiles and test configs from images/")
     print("  lock [target]       Generate packages.lock with pinned versions")
     print("  build [target]      Build an image (or all images if none specified)")
+    print("  retag <target>      Apply aliases to existing registry images")
     print("  manifest <target>   Create multi-platform manifest from registry images")
     print("  sbom [target]       Generate SBOM for an image (or all images)")
     print("  test [target]       Test an image (or all images if none specified)")
@@ -47,6 +48,9 @@ def print_usage() -> None:
     print("  --platform PLAT     Build for specific platform only (amd64, arm64)")
     print("                      Default: build all platforms + multi-platform manifest")
     print()
+    print("Retag options:")
+    print("  --snapshot-id ID    Use snapshot ID suffix for registry tags")
+    print()
     print("Manifest options:")
     print("  --snapshot-id ID    Use snapshot ID suffix for registry tags")
     print()
@@ -63,6 +67,7 @@ def print_usage() -> None:
     print("  image-manager build base:2025.09               # Build specific tag")
     print("  image-manager build base dotnet                # Build all tags for base and dotnet")
     print("  image-manager build --no-cache                 # Build without cache")
+    print("  image-manager retag dotnet:9.0.300             # Apply aliases (9.0, 9) to image")
     print("  image-manager sbom base:2025.09                # Generate SBOM for specific tag")
     print("  image-manager sbom dotnet                      # Generate SBOM for all dotnet tags")
     print("  image-manager test base                        # Test all base image tags")
@@ -394,6 +399,68 @@ def cmd_build(args: list[str]) -> int:
         return 1
 
     print(f"\nSuccessfully built {len(image_refs)} image(s)")
+    return 0
+
+
+def cmd_retag(args: list[str]) -> int:
+    """Apply aliases to existing registry images."""
+    from manager.building import tag_aliases, check_image_exists
+
+    image_refs = []
+    snapshot_id = None
+
+    # Parse options and image refs
+    i = 0
+    while i < len(args):
+        if args[i] == "--snapshot-id" and i + 1 < len(args):
+            snapshot_id = args[i + 1]
+            i += 2
+        elif args[i].startswith("--"):
+            print(f"Unknown argument: {args[i]}", file=sys.stderr)
+            return 1
+        else:
+            image_refs.append(args[i])
+            i += 1
+
+    if not image_refs:
+        print("Error: target is required for retag command", file=sys.stderr)
+        print("Usage: image-manager retag <image:tag> [--snapshot-id ID]", file=sys.stderr)
+        return 1
+
+    # Expand image names to all their tags
+    try:
+        image_refs = expand_image_refs(image_refs)
+        print(f"Retagging {len(image_refs)} image(s)...")
+    except CyclicDependencyError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
+
+    # Retag each image
+    failed = []
+    for image_ref in image_refs:
+        print(f"\n{'='*60}")
+        print(f"Retagging {image_ref}")
+        print(f"{'='*60}")
+
+        # Check if image exists first
+        if not check_image_exists(image_ref, snapshot_id):
+            print(f"Error: Image not found in registry: {image_ref}", file=sys.stderr)
+            failed.append(image_ref)
+            continue
+
+        try:
+            result = tag_aliases(image_ref, snapshot_id=snapshot_id)
+            if result != 0:
+                failed.append(image_ref)
+        except (RuntimeError, ValueError) as e:
+            print(f"Error: {e}", file=sys.stderr)
+            failed.append(image_ref)
+
+    if failed:
+        print(f"\nFailed to retag: {', '.join(failed)}", file=sys.stderr)
+        return 1
+
+    print(f"\nSuccessfully retagged {len(image_refs)} image(s)")
     return 0
 
 
@@ -794,6 +861,8 @@ def main():
         sys.exit(cmd_lock(args))
     elif command == "build":
         sys.exit(cmd_build(args))
+    elif command == "retag":
+        sys.exit(cmd_retag(args))
     elif command == "manifest":
         sys.exit(cmd_manifest(args))
     elif command == "sbom":
