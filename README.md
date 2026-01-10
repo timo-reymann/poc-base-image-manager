@@ -35,6 +35,7 @@ uv run image-manager <command> [args]
 
 Commands:
 - `generate [--no-lock]` - Generate Dockerfiles and test configs from `images/`
+- `generate-ci [--provider gitlab|github]` - Generate CI pipeline configuration
 - `lock <image:tag>` - Generate packages.lock with pinned versions and digest
 - `build [image:tag] [options]` - Build image(s) to `dist/<name>/<tag>/image.tar`
 - `manifest <image:tag>` - Create multi-platform manifest from registry images
@@ -516,7 +517,6 @@ uv run image-manager generate
 
 ## Future enhancements
 
-- CI pipeline generation (GitHub Actions, GitLab CI templates)
 - Pluggable version parsing strategies for non-semver tags (e.g., Ubuntu's `24.04`, date-based `2025.09`)
 
 ## Open questions
